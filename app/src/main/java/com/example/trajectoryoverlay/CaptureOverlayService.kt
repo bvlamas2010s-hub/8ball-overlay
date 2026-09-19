@@ -174,13 +174,16 @@ class CaptureOverlayService: Service() {
             val frame=padded.submat(0,height,0,width).clone()
             padded.release()
 
-            val result=analyzer!!.analyze(
-                frame,
-                Prefs.showDirect(this),
-                Prefs.showBanks(this),
-                Prefs.showSecondary(this)
-            )
-            frame.release()
+            val result=try {
+                analyzer!!.analyze(
+                    frame,
+                    Prefs.showDirect(this),
+                    Prefs.showBanks(this),
+                    Prefs.showSecondary(this)
+                )
+            } finally {
+                frame.release()
+            }
             overlay?.showAll=Prefs.showAll(this)
             overlay?.update(result)
             updateNotification(result.message)
