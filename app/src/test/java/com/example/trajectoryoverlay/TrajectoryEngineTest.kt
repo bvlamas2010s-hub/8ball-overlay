@@ -58,6 +58,43 @@ class TrajectoryEngineTest {
     }
 
     @Test
+    fun aimDirectionProducesCurrentShot() {
+        val table = RectF(50f, 50f, 1050f, 550f)
+        val cue = Ball(PointF(250f, 300f), 18f, cue = true)
+        val target = Ball(PointF(650f, 300f), 18f)
+
+        val result = TrajectoryEngine.calculateFromAim(
+            table,
+            listOf(cue, target),
+            PointF(1f, 0f),
+            banks = true,
+            secondary = true
+        )
+
+        assertEquals(1, result.size)
+        assertTrue(result.first().cuePath.size >= 2)
+        assertTrue(result.first().objectPath.size >= 2)
+    }
+
+    @Test
+    fun aimWithoutBallProducesKickPath() {
+        val table = RectF(50f, 50f, 1050f, 550f)
+        val cue = Ball(PointF(250f, 300f), 18f, cue = true)
+
+        val result = TrajectoryEngine.calculateFromAim(
+            table,
+            listOf(cue),
+            PointF(1f, 0.2f),
+            banks = true,
+            secondary = false
+        )
+
+        assertEquals(1, result.size)
+        assertTrue(result.first().cuePath.size >= 3)
+        assertTrue(result.first().objectPath.isEmpty())
+    }
+
+    @Test
     fun lineToRectEdgeFindsForwardBoundary() {
         val rect = RectF(0f, 0f, 100f, 50f)
         val hit = Geometry.lineToRectEdge(PointF(50f, 25f), PointF(1f, 0f), rect)
