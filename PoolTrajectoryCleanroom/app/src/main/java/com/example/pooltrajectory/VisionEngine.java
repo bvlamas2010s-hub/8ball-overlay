@@ -30,9 +30,11 @@ public final class VisionEngine {
 
         PixelFrame f = new PixelFrame(bmp);
         Table table = findTable(f);
+        if (table == null) table = fallbackEightBallTable(f);
         if (table == null) {
             if (bmp != original) bmp.recycle();
-            return invalid(VisionResult.State.NO_TABLE, "capture ok; table ROI not found");
+            return invalid(VisionResult.State.NO_TABLE,
+                    "capture=" + f.w + "x" + f.h + " • ROI not found");
         }
 
         List<Cue> cues = findCueBallCandidates(f, table);
@@ -152,6 +154,51 @@ public final class VisionEngine {
         float avgS=felt==0?.5f:sat/felt;
         float avgV=felt==0?.5f:val/felt;
         return new Table(roi,hue,avgS,avgV,conf);
+    }
+
+    /**
+     * Fast fallback calibrated from the user's 8 Ball Pool landscape screenshots.
+     * It is still validated by cloth color, so unrelated screens are rejected.
+     */
+    private Table fallbackEightBallTable(PixelFrame f) {
+        float aspect=f.w/(float)Math.max(1,f.h);
+        if(aspect<1.90f || aspect>2.40f) return null;
+
+        RectF roi=new RectF(
+                f.w*.176f,
+                f.h*.210f,
+                f.w*.824f,
+                f.h*.900f
+        );
+
+        int[] hist=new int[36];
+        int x0=(int)(f.w*.22f),x1=(int)(f.w*.78f);
+        int y0=(int)(f.h*.30f),y1=(int)(f.h*.82f);
+        for(int y=y0;y<y1;y+=3){
+            for(int x=x0;x<x1;x+=3){
+                HSV c=f.hsv(x,y);
+                if(c.s>.25f&&c.v>.14f&&c.v<.98f)
+                    hist[Math.min(35,(int)(c.h/10f))]++;
+            }
+        }
+        int best=0;
+        for(int i=1;i<hist.length;i++)if(hist[i]>hist[best])best=i;
+        if(hist[best]<50)return null;
+        float hue=best*10f+5f;
+
+        int total=0,felt=0;float sat=0,val=0;
+        for(int y=(int)roi.top;y<(int)roi.bottom;y+=5){
+            for(int x=(int)roi.left;x<(int)roi.right;x+=5){
+                total++;
+                HSV c=f.hsv(x,y);
+                if(isFelt(c,hue)){felt++;sat+=c.s;val+=c.v;}
+            }
+        }
+        float coverage=felt/(float)Math.max(1,total);
+        if(coverage<.52f)return null;
+        float avgS=felt==0?.5f:sat/felt;
+        float avgV=felt==0?.5f:val/felt;
+        return new Table(roi,hue,avgS,avgV,Math.min(.92f,.55f+coverage*.38f));
     }
 
     private List<Cue> findCueBallCandidates(PixelFrame f, Table t) {
