@@ -10,6 +10,8 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
     private var lastGood: AnalysisResult? = null
     private var lastGoodAt: Long = 0L
     private var lastBalls: List<Ball> = emptyList()
+    private var lastAimDir: PointF? = null
+    private var lastAimAt: Long = 0L
 
     fun analyze(frameRgba: Mat, direct:Boolean, banks:Boolean, secondary:Boolean): AnalysisResult {
         if(frameRgba.empty()) return empty(frameRgba.width(),frameRgba.height(),"Frame vazio")
@@ -37,6 +39,8 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
         )
 
         val ballsSmall=detectBalls(work,tableSmall)
+        val cueSmall=ballsSmall.firstOrNull{it.cue}
+        val rawAimSmall=if(cueSmall!=null) detectAimDirection(work,tableSmall,cueSmall) else null
         val detectedBalls=ballsSmall.map{
             Ball(
                 PointF((it.center.x/scale).toFloat(),(it.center.y/scale).toFloat()),
@@ -50,28 +54,146 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
         val balls=smoothBalls(detectedBalls)
         val pockets=TrajectoryEngine.pockets(table)
         val now=android.os.SystemClock.elapsedRealtime()
+        val aimDir=smoothAim(rawAimSmall,now)
 
         if(balls.size<2 || balls.none{it.cue}) {
-            val cached=lastGood
-            if(cached!=null && now-lastGoodAt<850L){
-                return cached.copy(message="rastreio temporário • ${balls.size} bolas atuais")
-            }
             return AnalysisResult(
                 table,balls,pockets,emptyList(),
-                message="$tableSource • ${balls.size} bolas • sens ${sensitivityProvider()}"
+                message="$tableSource • ${balls.size} bolas • aguardando detecção"
             )
         }
 
-        val trajectories=TrajectoryEngine.calculate(table,balls,pockets,direct,banks,secondary)
+        if(aimDir==null){
+            val cached=lastGood
+            if(cached!=null && now-lastGoodAt<700L){
+                return cached.copy(message="mira temporariamente perdida • mantendo última trajetória")
+            }
+            return AnalysisResult(
+                table,balls,pockets,emptyList(),
+                message="$tableSource • ${balls.size} bolas • mira não detectada"
+            )
+        }
+
+        val trajectories=TrajectoryEngine.calculateFromAim(
+            table,balls,aimDir,
+            banks=banks,
+            secondary=secondary
+        )
+
         val result=AnalysisResult(
             table,balls,pockets,trajectories,
-            message="$tableSource • ${balls.size} bolas • ${trajectories.size} rotas"
+            message="$tableSource • ${balls.size} bolas • mira detectada • ${trajectories.size} trajetória"
         )
+
         if(trajectories.isNotEmpty()){
             lastGood=result
             lastGoodAt=now
         }
         return result
+    }
+
+    private fun smoothAim(current:PointF?,now:Long):PointF?{
+        if(current!=null){
+            val n=Geometry.norm(current)
+            val prev=lastAimDir
+            val merged=if(prev!=null && Geometry.dot(prev,n)>0.65f){
+                Geometry.norm(
+                    PointF(
+                        prev.x*.28f+n.x*.72f,
+                        prev.y*.28f+n.y*.72f
+                    )
+                )
+            }else n
+            lastAimDir=merged
+            lastAimAt=now
+            return merged
+        }
+        return if(lastAimDir!=null && now-lastAimAt<450L) lastAimDir else null
+    }
+
+    private fun detectAimDirection(rgba:Mat,table:RectF,cue:Ball):PointF?{
+        val x=table.left.toInt().coerceAtLeast(0)
+        val y=table.top.toInt().coerceAtLeast(0)
+        val w=table.width().toInt().coerceAtMost(rgba.cols()-x)
+        val h=table.height().toInt().coerceAtMost(rgba.rows()-y)
+        if(w<120||h<80)return null
+
+        val roi=rgba.submat(Rect(x,y,w,h))
+        val rgb=Mat()
+        val hsv=Mat()
+        val mask=Mat()
+        Imgproc.cvtColor(roi,rgb,Imgproc.COLOR_RGBA2RGB)
+        Imgproc.cvtColor(rgb,hsv,Imgproc.COLOR_RGB2HSV)
+
+        Core.inRange(
+            hsv,
+            Scalar(0.0,0.0,170.0),
+            Scalar(179.0,88.0,255.0),
+            mask
+        )
+
+        val cueLocal=Point(
+            (cue.center.x-x).toDouble(),
+            (cue.center.y-y).toDouble()
+        )
+
+        Imgproc.circle(
+            mask,
+            cueLocal,
+            max(3.0,cue.radius*.72).roundToInt(),
+            Scalar(0.0),
+            -1
+        )
+
+        val lines=Mat()
+        val minLen=max(24.0,w*.028)
+        val gap=max(8.0,w*.012)
+        Imgproc.HoughLinesP(mask,lines,1.0,Math.PI/180.0,28,minLen,gap)
+
+        var bestDir:PointF?=null
+        var bestScore=Double.NEGATIVE_INFINITY
+        val cueGlobal=cue.center
+
+        if(lines.rows()>0){
+            for(i in 0 until lines.rows()){
+                val l=lines.get(i,0)?:continue
+                if(l.size<4)continue
+                val p1=PointF((x+l[0]).toFloat(),(y+l[1]).toFloat())
+                val p2=PointF((x+l[2]).toFloat(),(y+l[3]).toFloat())
+                val length=Geometry.dist(p1,p2)
+                if(length<minLen)continue
+
+                val dToCue=Geometry.distancePointSegment(cueGlobal,p1,p2)
+                val maxCueDist=max(cue.radius*5.0f,w*.075f)
+                if(dToCue>maxCueDist)continue
+
+                val mid=PointF((p1.x+p2.x)/2f,(p1.y+p2.y)/2f)
+                val raw=Geometry.norm(Geometry.sub(p2,p1))
+                val fromCue=Geometry.sub(mid,cueGlobal)
+                val dir=if(Geometry.dot(raw,fromCue)>=0f) raw else PointF(-raw.x,-raw.y)
+
+                val nearHorizontalEdge =
+                    (abs(p1.y-table.top)<cue.radius*2f && abs(p2.y-table.top)<cue.radius*2f) ||
+                    (abs(p1.y-table.bottom)<cue.radius*2f && abs(p2.y-table.bottom)<cue.radius*2f)
+                val nearVerticalEdge =
+                    (abs(p1.x-table.left)<cue.radius*2f && abs(p2.x-table.left)<cue.radius*2f) ||
+                    (abs(p1.x-table.right)<cue.radius*2f && abs(p2.x-table.right)<cue.radius*2f)
+                val edgePenalty=if(nearHorizontalEdge||nearVerticalEdge)180.0 else 0.0
+
+                val score=length*1.45-dToCue*2.6-edgePenalty
+                if(score>bestScore){
+                    bestScore=score
+                    bestDir=dir
+                }
+            }
+        }
+
+        lines.release()
+        mask.release()
+        hsv.release()
+        rgb.release()
+        roi.release()
+        return bestDir
     }
 
     private fun smoothBalls(current:List<Ball>):List<Ball>{
