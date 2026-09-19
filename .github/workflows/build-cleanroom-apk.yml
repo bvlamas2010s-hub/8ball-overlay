@@ -62,12 +62,12 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/PoolTrajectoryCleanroom-v0.3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/PoolTrajectoryCleanroom-v0.4.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v5
         with:
-          name: PoolTrajectoryCleanroom-v0.3-APK
-          path: PoolTrajectoryCleanroom/dist/PoolTrajectoryCleanroom-v0.3.apk
+          name: PoolTrajectoryCleanroom-v0.4-APK
+          path: PoolTrajectoryCleanroom/dist/PoolTrajectoryCleanroom-v0.4.apk
           if-no-files-found: error
           retention-days: 90
