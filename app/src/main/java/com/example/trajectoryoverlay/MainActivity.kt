@@ -60,7 +60,7 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(root)
 
         root.addView(TextView(this).apply {
-            text = "Trajectory Overlay Lab v0.3"
+            text = "Trajectory Overlay Lab v0.4"
             textSize = 25f
             setTextColor(Color.WHITE)
         })
@@ -93,6 +93,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(check("Bank shots (1 tabela)", Prefs.showBanks(this)) { Prefs.setBanks(this, it) })
         root.addView(check("Trajetória da branca após a colisão", Prefs.showSecondary(this)) { Prefs.setSecondary(this, it) })
         root.addView(check("Mostrar várias opções ao mesmo tempo", Prefs.showAll(this)) { Prefs.setAll(this, it) })
+        root.addView(check("Mostrar diagnóstico visual (mesa/bolas)", Prefs.visualDebug(this)) { Prefs.setVisualDebug(this, it) })
 
         root.addView(TextView(this).apply {
             text = "Sensibilidade de detecção das bolas"
@@ -120,7 +121,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(sensText)
 
         root.addView(TextView(this).apply {
-            text = "Diagnóstico esperado\n• Teste: aparece um X azul, texto e linhas de exemplo por 8 s.\n• Captura: topo mostra tamanho do frame e quantidade de bolas/rotas.\n• Se o teste aparece em outros apps mas some somente sobre um app específico, esse app pode estar bloqueando overlays.\n• Se aparece ‘0/1 bolas’, o problema é a detecção e não a permissão."
+            text = "Diagnóstico esperado\n• Teste: aparece um X azul, texto e linhas de exemplo por 8 s.\n• Durante a análise, puxe a notificação Trajectory Overlay e toque em ‘Salvar print’.\n• O app salva na Galeria/Pictures/TrajectoryOverlay uma imagem da tela capturada com mesa, bolas e trajetórias marcadas.\n• Envie essa imagem para eu calibrar o detector.\n• Deixe ‘Mostrar diagnóstico visual’ desligado para a tela ficar limpa."
             textSize = 13f
             setTextColor(Color.rgb(190, 200, 208))
             setPadding(0, dp(18), 0, dp(8))
