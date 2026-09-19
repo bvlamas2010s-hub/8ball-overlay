@@ -391,6 +391,204 @@ public final class VisionEngine {
         return weighted/Math.max(.001f,weights)*.82f+Math.min(1f,strong/8f)*.18f;
     }
 
+    private void buildRouteMap(VisionResult out, Table t, Cue cue, List<VisionResult.Ball> balls) {
+        if (out == null || t == null || cue == null || balls == null || balls.isEmpty()) return;
+
+        List<RouteCandidate> candidates = new ArrayList<>();
+        PointF[] pockets = pocketCenters(t, cue.r);
+        float nominalR = Math.max(4f, cue.r);
+        int color = 0;
+
+        for (int bi = 0; bi < balls.size(); bi++) {
+            VisionResult.Ball target = balls.get(bi);
+            if (target == null) continue;
+
+            for (int pi = 0; pi < pockets.length; pi++) {
+                PointF pocket = pockets[pi];
+
+                float vx = pocket.x - target.x;
+                float vy = pocket.y - target.y;
+                float len = (float)Math.hypot(vx, vy);
+                if (len < nominalR * 3f) continue;
+                float ux = vx / len, uy = vy / len;
+
+                float contactDistance = Math.max(nominalR + target.r, nominalR * 1.85f);
+                PointF ghost = new PointF(target.x - ux * contactDistance,
+                        target.y - uy * contactDistance);
+
+                if (!insidePlayable(t.roi, ghost, nominalR * .8f)) continue;
+                if (!segmentClear(cue.x, cue.y, ghost.x, ghost.y, balls, target,
+                        nominalR * 1.65f)) continue;
+                if (!segmentClear(target.x, target.y, pocket.x, pocket.y, balls, target,
+                        nominalR * 1.45f)) continue;
+
+                float cueLen = dist(cue.x, cue.y, ghost.x, ghost.y);
+                float score = routeScore(cueLen, len, false, t);
+                VisionResult.Route direct = new VisionResult.Route((color++) % 6, false, score);
+                direct.points.add(new PointF(cue.x, cue.y));
+                direct.points.add(ghost);
+                direct.points.add(new PointF(target.x, target.y));
+                direct.points.add(pocket);
+                candidates.add(new RouteCandidate(direct, bi, pi));
+
+                for (int rail = 0; rail < 4; rail++) {
+                    Bank bank = bankPoint(target.x, target.y, pocket, t.roi, rail, nominalR);
+                    if (bank == null) continue;
+
+                    float bx = bank.point.x, by = bank.point.y;
+                    float firstLen = dist(target.x, target.y, bx, by);
+                    float secondLen = dist(bx, by, pocket.x, pocket.y);
+                    if (firstLen < nominalR * 4f || secondLen < nominalR * 4f) continue;
+
+                    float dux = (bx - target.x) / Math.max(.001f, firstLen);
+                    float duy = (by - target.y) / Math.max(.001f, firstLen);
+                    PointF bankGhost = new PointF(
+                            target.x - dux * contactDistance,
+                            target.y - duy * contactDistance
+                    );
+                    if (!insidePlayable(t.roi, bankGhost, nominalR * .8f)) continue;
+                    if (!segmentClear(cue.x, cue.y, bankGhost.x, bankGhost.y, balls, target,
+                            nominalR * 1.65f)) continue;
+                    if (!segmentClear(target.x, target.y, bx, by, balls, target,
+                            nominalR * 1.45f)) continue;
+                    if (!segmentClear(bx, by, pocket.x, pocket.y, balls, target,
+                            nominalR * 1.45f)) continue;
+
+                    float bankScore = routeScore(
+                            dist(cue.x, cue.y, bankGhost.x, bankGhost.y),
+                            firstLen + secondLen,
+                            true,
+                            t
+                    );
+                    VisionResult.Route route = new VisionResult.Route((color++) % 6, true, bankScore);
+                    route.points.add(new PointF(cue.x, cue.y));
+                    route.points.add(bankGhost);
+                    route.points.add(new PointF(target.x, target.y));
+                    route.points.add(bank.point);
+                    route.points.add(pocket);
+                    candidates.add(new RouteCandidate(route, bi, pi));
+                }
+            }
+        }
+
+        candidates.sort((a, b) -> Float.compare(b.route.score, a.route.score));
+
+        boolean[] usedTarget = new boolean[Math.max(1, balls.size())];
+        for (RouteCandidate c : candidates) {
+            if (out.routes.size() >= 8) break;
+
+            // Prefer diversity: first pass gives different balls a route.
+            if (!usedTarget[c.ballIndex] || out.routes.size() >= 5) {
+                out.routes.add(c.route);
+                usedTarget[c.ballIndex] = true;
+            }
+        }
+    }
+
+    private PointF[] pocketCenters(Table t, float r) {
+        float left = t.roi.left;
+        float right = t.roi.right;
+        float top = t.roi.top;
+        float bottom = t.roi.bottom;
+        float mid = (left + right) * .5f;
+
+        // ROI follows the cloth more closely than the pocket centers. A tiny outward
+        // adjustment makes the route terminate visually in the six pockets.
+        float yPad = Math.max(r * 1.8f, t.roi.height() * .035f);
+        return new PointF[]{
+                new PointF(left, top),
+                new PointF(mid, top),
+                new PointF(right, top),
+                new PointF(left, bottom + yPad),
+                new PointF(mid, bottom + yPad),
+                new PointF(right, bottom + yPad)
+        };
+    }
+
+    private static float routeScore(float cueDistance, float objectDistance, boolean bank, Table t) {
+        float diag = (float)Math.hypot(t.roi.width(), t.roi.height());
+        float distancePenalty = (cueDistance + objectDistance) / Math.max(1f, diag * 1.8f);
+        float base = 1f - Math.min(.75f, distancePenalty * .55f);
+        if (bank) base -= .18f;
+        return clamp01(base);
+    }
+
+    private static boolean insidePlayable(RectF r, PointF p, float margin) {
+        return p.x > r.left + margin && p.x < r.right - margin
+                && p.y > r.top + margin && p.y < r.bottom + margin;
+    }
+
+    private static boolean segmentClear(
+            float x1, float y1, float x2, float y2,
+            List<VisionResult.Ball> balls,
+            VisionResult.Ball ignore,
+            float clearance
+    ) {
+        for (VisionResult.Ball b : balls) {
+            if (b == ignore) continue;
+            float d = pointSegmentDistance(b.x, b.y, x1, y1, x2, y2);
+            float need = Math.max(clearance, b.r + clearance * .55f);
+            if (d < need) return false;
+        }
+        return true;
+    }
+
+    private static float pointSegmentDistance(float px, float py, float ax, float ay, float bx, float by) {
+        float vx = bx - ax, vy = by - ay;
+        float wx = px - ax, wy = py - ay;
+        float vv = vx * vx + vy * vy;
+        if (vv < .0001f) return dist(px, py, ax, ay);
+        float t = (wx * vx + wy * vy) / vv;
+        t = Math.max(0f, Math.min(1f, t));
+        float cx = ax + vx * t, cy = ay + vy * t;
+        return dist(px, py, cx, cy);
+    }
+
+    private Bank bankPoint(float sx, float sy, PointF pocket, RectF r, int rail, float radius) {
+        float railPos, mx, my;
+        if (rail == 0) { // left
+            railPos = r.left + radius * .25f;
+            mx = 2f * railPos - pocket.x;
+            my = pocket.y;
+        } else if (rail == 1) { // right
+            railPos = r.right - radius * .25f;
+            mx = 2f * railPos - pocket.x;
+            my = pocket.y;
+        } else if (rail == 2) { // top
+            railPos = r.top + radius * .25f;
+            mx = pocket.x;
+            my = 2f * railPos - pocket.y;
+        } else { // bottom
+            railPos = r.bottom - radius * .25f;
+            mx = pocket.x;
+            my = 2f * railPos - pocket.y;
+        }
+
+        float dx = mx - sx, dy = my - sy;
+        float tHit;
+        float bx, by;
+
+        if (rail <= 1) {
+            if (Math.abs(dx) < .0001f) return null;
+            tHit = (railPos - sx) / dx;
+            if (tHit <= .02f || tHit >= .98f) return null;
+            bx = railPos;
+            by = sy + dy * tHit;
+            float margin = radius * 3.2f;
+            if (by <= r.top + margin || by >= r.bottom - margin) return null;
+        } else {
+            if (Math.abs(dy) < .0001f) return null;
+            tHit = (railPos - sy) / dy;
+            if (tHit <= .02f || tHit >= .98f) return null;
+            bx = sx + dx * tHit;
+            by = railPos;
+            float margin = radius * 3.2f;
+            if (bx <= r.left + margin || bx >= r.right - margin) return null;
+        }
+
+        return new Bank(new PointF(bx, by));
+    }
+
     private VisionResult buildGeometry(Table t, Cue cue, List<VisionResult.Ball> balls, Aim aim) {
         VisionResult r=new VisionResult();
         r.state=VisionResult.State.VALID_SHOT;
@@ -466,6 +664,18 @@ public final class VisionEngine {
     private static float clamp01(float v){return Math.max(0f,Math.min(1f,v));}
     private static String fmt(float v){return String.format(java.util.Locale.US,"%.2f",v);}
 
+    private static final class RouteCandidate {
+        final VisionResult.Route route;
+        final int ballIndex;
+        final int pocketIndex;
+        RouteCandidate(VisionResult.Route r, int b, int p) {
+            route = r; ballIndex = b; pocketIndex = p;
+        }
+    }
+    private static final class Bank {
+        final PointF point;
+        Bank(PointF p) { point = p; }
+    }
     private static final class RowRun {int y,start,end;RowRun(int y,int s,int e){this.y=y;start=s;end=e;}}
     private static final class Table {RectF roi;float hue,sat,val,confidence;Table(RectF r,float h,float s,float v,float c){roi=r;hue=h;sat=s;val=v;confidence=c;}}
     private static final class Cue {float x,y,r,score;Cue(float x,float y,float r,float s){this.x=x;this.y=y;this.r=r;score=s;}}
