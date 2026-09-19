@@ -714,9 +714,33 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
     }
 
     private fun ballVsFeltContrast(hsv:Mat,cx:Float,cy:Float,r:Float,feltHue:Double):Double{
+        var ringS=0.0
+        var ringV=0.0
+        var ringCount=0
+
+        for(i in 0 until 28){
+            val a=2.0*Math.PI*i/28.0
+            val rr=r*1.75f
+            val px=(cx+cos(a).toFloat()*rr).roundToInt()
+            val py=(cy+sin(a).toFloat()*rr).roundToInt()
+            if(px<0||py<0||px>=hsv.cols()||py>=hsv.rows())continue
+            val p=hsv.get(py,px)?:continue
+            if(p.size<3)continue
+            if(hueDistance(p[0],feltHue)<24.0){
+                ringS+=p[1]
+                ringV+=p[2]
+                ringCount++
+            }
+        }
+
+        if(ringCount<10)return 0.0
+        ringS/=ringCount.toDouble()
+        ringV/=ringCount.toDouble()
+
         var diff=0.0
         var total=0
-        val rr=max(2f,r*.58f)
+        val rr=max(2f,r*.60f)
+
         for(iy in -2..2){
             for(ix in -2..2){
                 val px=(cx+ix*rr/2.4f).roundToInt()
@@ -725,13 +749,16 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
                 val p=hsv.get(py,px)?:continue
                 if(p.size<3)continue
 
-                val huePart=(hueDistance(p[0],feltHue)/90.0).coerceIn(0.0,1.0)
-                val lowSatPart=((70.0-p[1])/70.0).coerceIn(0.0,1.0)
-                val brightPart=((p[2]-150.0)/105.0).coerceIn(0.0,1.0)
-                diff+=max(huePart,max(lowSatPart,brightPart))
+                val huePart=(hueDistance(p[0],feltHue)/75.0).coerceIn(0.0,1.0)
+                val satPart=(abs(p[1]-ringS)/155.0).coerceIn(0.0,1.0)
+                val valuePart=(abs(p[2]-ringV)/150.0).coerceIn(0.0,1.0)
+                val whitePart=if(p[1]<55.0 && p[2]>165.0)0.65 else 0.0
+
+                diff+=max(whitePart,max(huePart,max(satPart,valuePart)))
                 total++
             }
         }
+
         return if(total<8)0.0 else diff/total.toDouble()
     }
 
