@@ -41,23 +41,47 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
         val kernel=Imgproc.getStructuringElement(Imgproc.MORPH_RECT,Size(19.0,19.0))
         Imgproc.morphologyEx(mask,mask,Imgproc.MORPH_CLOSE,kernel)
         val contours=mutableListOf<MatOfPoint>(); Imgproc.findContours(mask,contours,Mat(),Imgproc.RETR_EXTERNAL,Imgproc.CHAIN_APPROX_SIMPLE)
-        var best:Rect?=null;var score=-1.0
-        val frameArea=rgba.cols().toDouble()*rgba.rows()
+        var best:RectF?=null; var score=-1.0
+        val frameArea=rgba.cols().toDouble()*rgba.rows().toDouble()
         for(c in contours){
-            val r=Imgproc.boundingRect(c); val ar=r.width.toDouble()/r.height.coerceAtLeast(1)
-            val area=r.width.toDouble()*r.height
-            if(area<frameArea*.18||ar<1.35||ar>2.8||r.width<rgba.cols()*.5)continue
-            val centerPenalty=abs((r.x+r.width/2.0)-rgba.cols()/2.0)/rgba.cols()+abs((r.y+r.height/2.0)-rgba.rows()/2.0)/rgba.rows()
-            val sc=area*(1.0-centerPenalty*.35)-abs(ar-2.0)*area*.12
-            if(sc>score){score=sc;best=r}
+            val pts=c.toArray()
+            if(pts.isEmpty()) continue
+            var minX=Double.POSITIVE_INFINITY
+            var minY=Double.POSITIVE_INFINITY
+            var maxX=Double.NEGATIVE_INFINITY
+            var maxY=Double.NEGATIVE_INFINITY
+            for(p in pts){
+                if(p.x<minX) minX=p.x
+                if(p.y<minY) minY=p.y
+                if(p.x>maxX) maxX=p.x
+                if(p.y>maxY) maxY=p.y
+            }
+            val rw=(maxX-minX).coerceAtLeast(1.0)
+            val rh=(maxY-minY).coerceAtLeast(1.0)
+            val ar=rw/rh
+            val area=rw*rh
+            if(area<frameArea*.18 || ar<1.35 || ar>2.8 || rw<rgba.cols()*.5) continue
+            val centerPenalty =
+                kotlin.math.abs((minX+rw/2.0)-rgba.cols()/2.0)/rgba.cols().toDouble() +
+                kotlin.math.abs((minY+rh/2.0)-rgba.rows()/2.0)/rgba.rows().toDouble()
+            val sc=area*(1.0-centerPenalty*.35)-kotlin.math.abs(ar-2.0)*area*.12
+            if(sc>score){
+                score=sc
+                best=RectF(minX.toFloat(),minY.toFloat(),maxX.toFloat(),maxY.toFloat())
+            }
         }
         contours.forEach{it.release()};kernel.release();mask.release();hsv.release();rgb.release()
         return best?.let{expandClamp(it,rgba.cols(),rgba.rows())}
     }
 
-    private fun expandClamp(r:Rect,w:Int,h:Int):RectF{
-        val ex=r.width*.035f; val ey=r.height*.06f
-        return RectF((r.x-ex).coerceAtLeast(0f),(r.y-ey).coerceAtLeast(0f),(r.x+r.width+ex).coerceAtMost(w.toFloat()),(r.y+r.height+ey).coerceAtMost(h.toFloat()))
+    private fun expandClamp(r:RectF,w:Int,h:Int):RectF{
+        val ex=r.width()*.035f; val ey=r.height()*.06f
+        return RectF(
+            (r.left-ex).coerceAtLeast(0f),
+            (r.top-ey).coerceAtLeast(0f),
+            (r.right+ex).coerceAtMost(w.toFloat()),
+            (r.bottom+ey).coerceAtMost(h.toFloat())
+        )
     }
     private fun fallbackTable(w:Int,h:Int):RectF{
         val width=w*.92f; val height=min(h*.72f,width/1.9f)
