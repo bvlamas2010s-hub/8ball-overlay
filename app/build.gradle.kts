@@ -3,13 +3,22 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val stableKeystore = rootProject.file("ci/trajectory-debug.jks")
+if (!stableKeystore.exists()) {
+    val encoded = rootProject.file("ci/trajectory-debug-keystore.b64")
+    if (encoded.exists()) {
+        stableKeystore.parentFile.mkdirs()
+        stableKeystore.writeBytes(java.util.Base64.getDecoder().decode(encoded.readText().trim()))
+    }
+}
+
 android {
     namespace = "com.example.trajectoryoverlay"
     compileSdk = 35
 
     signingConfigs {
         create("stableDebug") {
-            storeFile = rootProject.file("ci/trajectory-debug.jks")
+            storeFile = stableKeystore
             storePassword = "trajectory123"
             keyAlias = "trajectory"
             keyPassword = "trajectory123"
