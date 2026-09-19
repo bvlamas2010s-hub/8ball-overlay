@@ -12,16 +12,13 @@ class OverlayView(context: Context): View(context) {
     @Volatile var visualDebug: Boolean = false
 
     private val directPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
-        color=Color.rgb(105,200,255);strokeWidth=5f;style=Paint.Style.STROKE
-        pathEffect=DashPathEffect(floatArrayOf(16f,10f),0f)
+        color=Color.WHITE;strokeWidth=6f;style=Paint.Style.STROKE
     }
     private val objectPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
-        color=Color.rgb(94,242,139);strokeWidth=5f;style=Paint.Style.STROKE
-        pathEffect=DashPathEffect(floatArrayOf(16f,10f),0f)
+        color=Color.rgb(94,242,139);strokeWidth=6f;style=Paint.Style.STROKE
     }
     private val bankPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
-        color=Color.rgb(255,188,99);strokeWidth=5f;style=Paint.Style.STROKE
-        pathEffect=DashPathEffect(floatArrayOf(12f,9f),0f)
+        color=Color.rgb(255,188,99);strokeWidth=6f;style=Paint.Style.STROKE
     }
     private val secondaryPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
         color=Color.rgb(255,105,105);strokeWidth=4f;style=Paint.Style.STROKE
@@ -84,8 +81,8 @@ class OverlayView(context: Context): View(context) {
             if(i<10 && t.secondaryCuePath.size>1){
                 drawPolyline(canvas,t.secondaryCuePath,secondaryPaint,if(i==0)225 else 90)
             }
-            if(i==0){
-                ghostPaint.alpha=200
+            if(i==0 && t.objectPath.isNotEmpty()){
+                ghostPaint.alpha=220
                 val rad=r.balls.map{it.radius}.average().toFloat().coerceAtLeast(8f)
                 canvas.drawCircle(t.ghost.x,t.ghost.y,rad,ghostPaint)
             }
