@@ -10,14 +10,14 @@ public final class ResultStabilizer {
     private VisionResult candidate;
     private int candidateFrames;
     private int invalidFrames;
-    private int routeRefreshCounter;
+    private int trajectoryRefreshCounter;
 
     public synchronized VisionResult push(VisionResult now) {
         boolean usable = now != null
                 && now.roi != null
                 && now.cueBall != null
                 && now.confidence >= 0.28f
-                && (now.isDrawable() || !now.routes.isEmpty());
+                && (now.isDrawable() || !now.trajectories.isEmpty());
 
         if (!usable) {
             invalidFrames++;
@@ -40,7 +40,7 @@ public final class ResultStabilizer {
                 stable = now;
                 candidate = null;
                 candidateFrames = 0;
-                routeRefreshCounter = 0;
+                trajectoryRefreshCounter = 0;
             }
             return stable;
         }
@@ -56,22 +56,22 @@ public final class ResultStabilizer {
                 stable = now;
                 candidate = null;
                 candidateFrames = 0;
-                routeRefreshCounter = 0;
+                trajectoryRefreshCounter = 0;
             }
             return stable;
         }
 
-        List<VisionResult.Route> oldRoutes = new ArrayList<>(stable.routes);
+        List<VisionResult.Trajectory> oldTrajectories = new ArrayList<>(stable.trajectories);
         stable = smooth(stable, now, .38f);
 
-        // Route planning is more sensitive than cue tracking. Refresh it only after
+        // Trajectory prediction is more sensitive than cue tracking. Refresh it only after
         // several compatible frames so one noisy frame cannot redraw the whole map.
-        routeRefreshCounter++;
-        if (routeRefreshCounter < 4 && !oldRoutes.isEmpty()) {
-            stable.routes.clear();
-            stable.routes.addAll(oldRoutes);
+        trajectoryRefreshCounter++;
+        if (trajectoryRefreshCounter < 4 && !oldTrajectories.isEmpty()) {
+            stable.trajectories.clear();
+            stable.trajectories.addAll(oldTrajectories);
         } else {
-            routeRefreshCounter = 0;
+            trajectoryRefreshCounter = 0;
         }
 
         candidate = null;
