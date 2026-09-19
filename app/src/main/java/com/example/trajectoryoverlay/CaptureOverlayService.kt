@@ -4,6 +4,10 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.PointF
 import android.graphics.RectF
@@ -13,12 +17,16 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.*
+import android.provider.MediaStore
 import android.provider.Settings
+import android.content.ContentValues
+import android.os.Environment
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import org.opencv.android.OpenCVLoader
+import org.opencv.android.Utils
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 
@@ -27,6 +35,7 @@ class CaptureOverlayService: Service() {
         const val ACTION_START="trajectory.START"
         const val ACTION_STOP="trajectory.STOP"
         const val ACTION_TEST="trajectory.TEST"
+        const val ACTION_SAVE_DEBUG="trajectory.SAVE_DEBUG"
         const val EXTRA_RESULT_CODE="resultCode"
         const val EXTRA_RESULT_DATA="resultData"
         private const val CHANNEL="trajectory_capture"
@@ -44,6 +53,7 @@ class CaptureOverlayService: Service() {
     private var lastNotifyAt=0L
     private var running=false
     private var openCvReady=false
+    @Volatile private var saveDebugAfter=0L
     private val mainHandler=Handler(Looper.getMainLooper())
     private val projectionCallback=object:MediaProjection.Callback(){override fun onStop(){stopEverything()}}
 
@@ -66,6 +76,13 @@ class CaptureOverlayService: Service() {
                 addOverlay(secure=false)
                 showSyntheticTest()
                 mainHandler.postDelayed({ stopEverything() },8000)
+                return START_NOT_STICKY
+            }
+            ACTION_SAVE_DEBUG -> {
+                if(running){
+                    saveDebugAfter=SystemClock.elapsedRealtime()+650L
+                    updateNotification("Print solicitado • volte para a mesa")
+                }
                 return START_NOT_STICKY
             }
             ACTION_START -> Unit
@@ -99,12 +116,15 @@ class CaptureOverlayService: Service() {
     private fun notification(text:String):Notification{
         val stopIntent=Intent(this,CaptureOverlayService::class.java).apply{action=ACTION_STOP}
         val stopPi=PendingIntent.getService(this,0,stopIntent,PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val saveIntent=Intent(this,CaptureOverlayService::class.java).apply{action=ACTION_SAVE_DEBUG}
+        val savePi=PendingIntent.getService(this,1,saveIntent,PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return NotificationCompat.Builder(this,CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentTitle("Trajectory Overlay")
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setOngoing(true)
+            .addAction(0,"Salvar print",savePi)
             .addAction(0,"Parar",stopPi)
             .build()
     }
@@ -182,19 +202,26 @@ class CaptureOverlayService: Service() {
             val frame=padded.submat(0,height,0,width).clone()
             padded.release()
 
-            val result=try {
-                analyzer!!.analyze(
+            try {
+                val result=analyzer!!.analyze(
                     frame,
                     Prefs.showDirect(this),
                     Prefs.showBanks(this),
                     Prefs.showSecondary(this)
                 )
+                overlay?.showAll=Prefs.showAll(this)
+                overlay?.visualDebug=Prefs.visualDebug(this)
+                overlay?.update(result)
+
+                if(saveDebugAfter>0L && now>=saveDebugAfter){
+                    saveDebugAfter=0L
+                    saveDebugImage(frame,result)
+                }
+
+                updateNotification(result.message)
             } finally {
                 frame.release()
             }
-            overlay?.showAll=Prefs.showAll(this)
-            overlay?.update(result)
-            updateNotification(result.message)
         }catch(t:Throwable){
             val msg="Erro de análise: ${t.javaClass.simpleName}: ${t.message ?: "sem detalhe"}"
             val table=RectF(0f,0f,width.toFloat(),height.toFloat())
@@ -208,7 +235,7 @@ class CaptureOverlayService: Service() {
     private fun addOverlay(secure:Boolean){
         try{overlay?.let{wm?.removeView(it)}}catch(_:Throwable){}
         wm=getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        overlay=OverlayView(this)
+        overlay=OverlayView(this).also{ it.showAll=Prefs.showAll(this); it.visualDebug=Prefs.visualDebug(this) }
         val type=if(Build.VERSION.SDK_INT>=26) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
@@ -258,6 +285,86 @@ class CaptureOverlayService: Service() {
             )
         )
         updateNotification("TESTE: se você vê X azul + linhas, o overlay funciona")
+    }
+
+    private fun saveDebugImage(frame:Mat,result:AnalysisResult){
+        if(Build.VERSION.SDK_INT<29){
+            updateNotification("Salvar print requer Android 10 ou mais recente")
+            return
+        }
+
+        val bitmap=Bitmap.createBitmap(frame.cols(),frame.rows(),Bitmap.Config.ARGB_8888)
+        Utils.matToBitmap(frame,bitmap)
+        val canvas=Canvas(bitmap)
+
+        val tablePaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+            color=Color.CYAN;style=Paint.Style.STROKE;strokeWidth=4f
+        }
+        val ballPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+            style=Paint.Style.STROKE;strokeWidth=4f
+        }
+        val cuePaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+            color=Color.rgb(80,210,255);style=Paint.Style.STROKE;strokeWidth=6f
+        }
+        val objectPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+            color=Color.rgb(100,245,140);style=Paint.Style.STROKE;strokeWidth=6f
+        }
+        val bankPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+            color=Color.rgb(255,190,90);style=Paint.Style.STROKE;strokeWidth=6f
+        }
+        val textPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
+            color=Color.WHITE;textSize=34f;setShadowLayer(6f,0f,2f,Color.BLACK)
+        }
+        val bg=Paint().apply{color=Color.argb(175,0,0,0)}
+
+        canvas.drawRect(result.table,tablePaint)
+        result.balls.forEach{b->
+            ballPaint.color=if(b.cue)Color.CYAN else Color.WHITE
+            canvas.drawCircle(b.center.x,b.center.y,b.radius+3f,ballPaint)
+        }
+
+        result.trajectories.take(8).forEachIndexed{i,t->
+            val alpha=if(i==0)255 else 110
+            cuePaint.alpha=alpha
+            objectPaint.alpha=alpha
+            bankPaint.alpha=alpha
+            drawPath(canvas,t.cuePath,cuePaint)
+            drawPath(canvas,t.objectPath,if(t.kind==PathKind.DIRECT)objectPaint else bankPaint)
+        }
+
+        val text="DEBUG • "+result.message
+        val bounds=android.graphics.Rect()
+        textPaint.getTextBounds(text,0,text.length,bounds)
+        canvas.drawRect(18f,18f,(bounds.width()+58).toFloat(),72f,bg)
+        canvas.drawText(text,30f,55f,textPaint)
+
+        val values=ContentValues().apply{
+            put(MediaStore.Images.Media.DISPLAY_NAME,"TrajectoryDebug_"+System.currentTimeMillis()+".png")
+            put(MediaStore.Images.Media.MIME_TYPE,"image/png")
+            put(MediaStore.Images.Media.RELATIVE_PATH,Environment.DIRECTORY_PICTURES+"/TrajectoryOverlay")
+            put(MediaStore.Images.Media.IS_PENDING,1)
+        }
+        val uri=contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)
+        if(uri!=null){
+            contentResolver.openOutputStream(uri)?.use{bitmap.compress(Bitmap.CompressFormat.PNG,100,it)}
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING,0)
+            contentResolver.update(uri,values,null,null)
+            updateNotification("Print salvo em Fotos/Pictures/TrajectoryOverlay")
+            mainHandler.post{
+                android.widget.Toast.makeText(this,"Print de diagnóstico salvo na Galeria",android.widget.Toast.LENGTH_LONG).show()
+            }
+        }else{
+            updateNotification("Falha ao salvar print")
+        }
+        bitmap.recycle()
+    }
+
+    private fun drawPath(canvas:Canvas,points:List<PointF>,paint:Paint){
+        if(points.size<2)return
+        for(i in 0 until points.size-1){
+            canvas.drawLine(points[i].x,points[i].y,points[i+1].x,points[i+1].y,paint)
+        }
     }
 
     private fun stopEverythingResourcesOnly(){
