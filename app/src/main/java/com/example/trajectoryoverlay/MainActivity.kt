@@ -60,12 +60,12 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(root)
 
         root.addView(TextView(this).apply {
-            text = "Trajectory Overlay Lab v0.4"
+            text = "Trajectory Overlay Lab v0.5"
             textSize = 25f
             setTextColor(Color.WHITE)
         })
         root.addView(TextView(this).apply {
-            text = "Primeiro teste o overlay sozinho. Depois inicie a captura. O texto no topo mostra se o problema está no overlay, na captura ou na detecção."
+            text = "Modo novo: o app detecta a linha de mira do próprio jogo e estende somente a tacada atual, incluindo colisão e rebotes."
             textSize = 14f
             setTextColor(Color.rgb(185, 199, 210))
             setPadding(0, dp(6), 0, dp(14))
