@@ -56,11 +56,16 @@ public final class VisionEngine {
 
         if (pair == null) {
             Cue bestCue = cues.get(0);
+            List<VisionResult.Ball> balls = findObjectBalls(f, table, bestCue);
             VisionResult r = invalid(VisionResult.State.NO_GUIDE,
-                    "table+cue ok; no thin aiming guide • cues=" + cues.size());
+                    "table+cue ok; route map active • cues=" + cues.size());
             r.roi = table.roi;
             r.cueBall = new PointF(bestCue.x, bestCue.y);
             r.cueRadius = bestCue.r;
+            r.balls.addAll(balls);
+            buildRouteMap(r, table, bestCue, balls);
+            r.debug = "table=" + fmt(table.confidence) + " cue=" + fmt(bestCue.score)
+                    + " balls=" + balls.size() + " routes=" + r.routes.size() + " • no live guide";
             r.confidence = Math.min(table.confidence, bestCue.score);
             if (bmp != original) bmp.recycle();
             return rescale(r, down);
@@ -70,9 +75,11 @@ public final class VisionEngine {
         Aim aim = pair.aim;
         List<VisionResult.Ball> balls = findObjectBalls(f, table, cue);
         VisionResult out = buildGeometry(table, cue, balls, aim);
+        buildRouteMap(out, table, cue, balls);
         out.confidence = Math.min(table.confidence, Math.min(cue.score, aim.score));
         out.debug = "table=" + fmt(table.confidence) + " cue=" + fmt(cue.score)
-                + " guide=" + fmt(aim.score) + " balls=" + balls.size();
+                + " guide=" + fmt(aim.score) + " balls=" + balls.size()
+                + " routes=" + out.routes.size();
         if (bmp != original) bmp.recycle();
         return rescale(out, down);
     }
