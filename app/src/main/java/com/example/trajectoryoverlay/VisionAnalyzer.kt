@@ -581,18 +581,35 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
         val y=table.top.toInt().coerceAtLeast(0)
         val w=table.width().toInt().coerceAtMost(rgba.cols()-x)
         val h=table.height().toInt().coerceAtMost(rgba.rows()-y)
-        if(w<120||h<70)return emptyList()
+        if(w<180||h<100)return emptyList()
 
         val roi=rgba.submat(Rect(x,y,w,h))
         val gray=Mat()
+        val rgb=Mat()
+        val hsv=Mat()
         Imgproc.cvtColor(roi,gray,Imgproc.COLOR_RGBA2GRAY)
-        Imgproc.equalizeHist(gray,gray)
-        Imgproc.GaussianBlur(gray,gray,Size(5.0,5.0),1.2)
+        Imgproc.cvtColor(roi,rgb,Imgproc.COLOR_RGBA2RGB)
+        Imgproc.cvtColor(rgb,hsv,Imgproc.COLOR_RGB2HSV)
+        Imgproc.GaussianBlur(gray,gray,Size(5.0,5.0),1.1)
 
-        val minR=max(5,(w/125.0).roundToInt())
-        val maxR=max(minR+4,(w/30.0).roundToInt())
+        // Calibrado para o tamanho real das bolas no 8 Ball Pool:
+        // em geral o raio fica perto de 1/70–1/85 da largura útil da mesa.
+        val expectedR=(w/76.0).coerceAtLeast(6.0)
+        val minR=max(5,(expectedR*.68).roundToInt())
+        val maxR=max(minR+3,(expectedR*1.38).roundToInt())
+
+        val feltHue=dominantFeltHue(hsv)
         val base=sensitivityProvider().coerceIn(10,30)
-        val passes=listOf(base,(base-4).coerceAtLeast(10),(base+4).coerceAtMost(30)).distinct()
+        val passes=listOf(
+            (base+3).coerceAtMost(30),
+            base,
+            (base-3).coerceAtLeast(11)
+        ).distinct()
+
+        val innerLeft=table.left+w*.030f
+        val innerRight=table.right-w*.030f
+        val innerTop=table.top+h*.055f
+        val innerBottom=table.bottom-h*.055f
 
         val raw=mutableListOf<Ball>()
         for(param2 in passes){
@@ -600,57 +617,127 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
             Imgproc.HoughCircles(
                 gray,circles,
                 Imgproc.HOUGH_GRADIENT,
-                1.15,
-                minR*2.0,
-                105.0,
+                1.18,
+                expectedR*1.65,
+                115.0,
                 param2.toDouble(),
                 minR,maxR
             )
 
             if(circles.cols()>0){
                 for(i in 0 until circles.cols()){
-                    val c=circles.get(0,i)?:continue
-                    if(c.size<3)continue
-                    val center=PointF((x+c[0]).toFloat(),(y+c[1]).toFloat())
-                    val rad=c[2].toFloat()
+                    val cc=circles.get(0,i)?:continue
+                    if(cc.size<3)continue
 
-                    if(center.x<table.left+rad*1.1f || center.x>table.right-rad*1.1f ||
-                       center.y<table.top+rad*1.1f || center.y>table.bottom-rad*1.1f) continue
+                    val localX=cc[0].toFloat()
+                    val localY=cc[1].toFloat()
+                    val center=PointF(x+localX,y+localY)
+                    val rad=cc[2].toFloat()
 
-                    val pockets=TrajectoryEngine.pockets(table)
-                    if(pockets.any{Geometry.dist(it,center)<rad*2.2f})continue
+                    // Nada de HUD, trilho, caçapa ou decoração: só o pano útil.
+                    if(center.x<innerLeft || center.x>innerRight ||
+                       center.y<innerTop || center.y>innerBottom) continue
+
+                    // Uma bola real fica cercada principalmente pelo pano.
+                    val ringScore=feltRingFraction(hsv,localX,localY,rad,feltHue)
+                    if(ringScore<0.56)continue
+
+                    // O interior da bola precisa diferir do pano ao redor.
+                    val contrast=ballVsFeltContrast(hsv,localX,localY,rad,feltHue)
+                    if(contrast<0.17)continue
 
                     val cueScore=whiteness(rgba,center,rad)
                     val candidate=Ball(center,rad,false,cueScore)
-                    if(raw.none{Geometry.dist(it.center,candidate.center)<max(it.radius,candidate.radius)*1.05f}){
+
+                    if(raw.none{
+                        Geometry.dist(it.center,candidate.center)<max(it.radius,candidate.radius)*1.20f
+                    }){
                         raw.add(candidate)
                     }
                 }
             }
             circles.release()
 
-            if(raw.size in 2..16) break
-            if(raw.size>16) break
+            // Não continue tornando a detecção mais permissiva se já houver
+            // uma quantidade plausível de bolas.
+            if(raw.size in 2..16)break
         }
 
+        hsv.release()
+        rgb.release()
         gray.release()
         roi.release()
+
         if(raw.isEmpty())return emptyList()
 
-        val plausible=raw.filter{it.radius in minR.toFloat()..(maxR*1.15f)}
-        if(plausible.isEmpty())return emptyList()
-
-        val radii=plausible.map{it.radius}.sorted()
+        // As bolas de uma mesma mesa têm praticamente o mesmo raio.
+        val radii=raw.map{it.radius}.sorted()
         val medianRadius=radii[radii.size/2]
-        val clustered=plausible.filter{it.radius>=medianRadius*.72f && it.radius<=medianRadius*1.38f}
-        val geometric=(if(clustered.size>=2)clustered else plausible)
-            .sortedBy{it.center.x}
+        val clustered=raw.filter{
+            it.radius>=medianRadius*.82f && it.radius<=medianRadius*1.20f
+        }
+
+        val geometric=(if(clustered.size>=2)clustered else raw)
             .take(16)
 
         if(geometric.isEmpty())return emptyList()
 
-        val cueIndex=geometric.indices.maxByOrNull{geometric[it].confidence}?:0
+        // Só aceitamos uma branca razoavelmente clara. Se não houver,
+        // não inventamos uma cue ball a partir de um círculo aleatório.
+        val cueIndex=geometric.indices.maxByOrNull{geometric[it].confidence}?:return emptyList()
+        val sortedScores=geometric.map{it.confidence}.sortedDescending()
+        val cueScore=geometric[cueIndex].confidence
+        val second=sortedScores.getOrElse(1){-999f}
+        if(cueScore<80f || cueScore-second<8f)return emptyList()
+
         return geometric.mapIndexed{idx,b->b.copy(cue=idx==cueIndex)}
+    }
+
+    private fun feltRingFraction(hsv:Mat,cx:Float,cy:Float,r:Float,feltHue:Double):Double{
+        var good=0
+        var total=0
+        val radii=floatArrayOf(r*1.55f,r*1.85f)
+        for(rr in radii){
+            for(i in 0 until 24){
+                val a=2.0*Math.PI*i/24.0
+                val px=(cx+cos(a).toFloat()*rr).roundToInt()
+                val py=(cy+sin(a).toFloat()*rr).roundToInt()
+                if(px<0||py<0||px>=hsv.cols()||py>=hsv.rows())continue
+                val p=hsv.get(py,px)?:continue
+                if(p.size<3)continue
+                total++
+                val hueDist=hueDistance(p[0],feltHue)
+                if(hueDist<22.0 && p[1]>28.0 && p[2]>20.0)good++
+            }
+        }
+        return if(total<16)0.0 else good.toDouble()/total.toDouble()
+    }
+
+    private fun ballVsFeltContrast(hsv:Mat,cx:Float,cy:Float,r:Float,feltHue:Double):Double{
+        var diff=0.0
+        var total=0
+        val rr=max(2f,r*.58f)
+        for(iy in -2..2){
+            for(ix in -2..2){
+                val px=(cx+ix*rr/2.4f).roundToInt()
+                val py=(cy+iy*rr/2.4f).roundToInt()
+                if(px<0||py<0||px>=hsv.cols()||py>=hsv.rows())continue
+                val p=hsv.get(py,px)?:continue
+                if(p.size<3)continue
+
+                val huePart=(hueDistance(p[0],feltHue)/90.0).coerceIn(0.0,1.0)
+                val lowSatPart=((70.0-p[1])/70.0).coerceIn(0.0,1.0)
+                val brightPart=((p[2]-150.0)/105.0).coerceIn(0.0,1.0)
+                diff+=max(huePart,max(lowSatPart,brightPart))
+                total++
+            }
+        }
+        return if(total<8)0.0 else diff/total.toDouble()
+    }
+
+    private fun hueDistance(a:Double,b:Double):Double{
+        val d=abs(a-b)
+        return min(d,180.0-d)
     }
 
     private fun whiteness(rgba:Mat,c:PointF,r:Float):Float{
