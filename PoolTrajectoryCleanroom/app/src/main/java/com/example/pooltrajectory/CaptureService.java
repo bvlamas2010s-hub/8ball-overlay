@@ -88,8 +88,13 @@ public final class CaptureService extends Service {
                 try{
                     VisionResult raw=vision.analyze(frame);
                     VisionResult stable=stabilizer.push(raw);
-                    overlay.setResult(stable);
-                }catch(Throwable ignored){overlay.setResult(null);}finally{frame.recycle();analyzing.set(false);}
+                    overlay.setResult(stable != null ? stable : raw);
+                }catch(Throwable error){
+                    VisionResult failed = new VisionResult();
+                    failed.state = VisionResult.State.NO_TABLE;
+                    failed.debug = "analysis error: " + error.getClass().getSimpleName();
+                    overlay.setResult(failed);
+                }finally{frame.recycle();analyzing.set(false);}
             });
         },imageHandler);
         virtualDisplay=projection.createVirtualDisplay("PoolTrajectoryCapture",screenW,screenH,densityDpi,
