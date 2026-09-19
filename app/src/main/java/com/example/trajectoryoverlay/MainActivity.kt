@@ -93,7 +93,7 @@ class MainActivity : AppCompatActivity() {
         })
         val sensText = TextView(this).apply {
             setTextColor(Color.LTGRAY)
-            text = "${Prefs.sensitivity(this)} (menor = detecta mais círculos)"
+            text = "${Prefs.sensitivity(this@MainActivity)} (menor = detecta mais círculos)"
         }
         val seek = SeekBar(this).apply {
             max = 20
