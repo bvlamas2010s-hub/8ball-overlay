@@ -88,13 +88,9 @@ class OverlayView(context: Context): View(context) {
             }
         }
 
-        if(visualDebug){
-            r.balls.forEach{b->
-                ballPaint.color=if(b.cue)Color.CYAN else Color.argb(220,255,255,255)
-                ballPaint.alpha=if(b.cue)255 else 190
-                canvas.drawCircle(b.center.x,b.center.y,b.radius+3f,ballPaint)
-            }
-        }
+        // Os círculos das bolas não são mais desenhados ao vivo.
+        // Isso evita que falsos positivos poluam a tela; eles continuam
+        // aparecendo somente no print de diagnóstico salvo pela notificação.
     }
 
     private fun drawPolyline(c:Canvas,pts:List<PointF>,p:Paint,a:Int){
