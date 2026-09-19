@@ -7,6 +7,10 @@ import org.opencv.imgproc.Imgproc
 import kotlin.math.*
 
 class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
+    private var lastGood: AnalysisResult? = null
+    private var lastGoodAt: Long = 0L
+    private var lastBalls: List<Ball> = emptyList()
+
     fun analyze(frameRgba: Mat, direct:Boolean, banks:Boolean, secondary:Boolean): AnalysisResult {
         if(frameRgba.empty()) return empty(frameRgba.width(),frameRgba.height(),"Frame vazio")
 
@@ -33,7 +37,7 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
         )
 
         val ballsSmall=detectBalls(work,tableSmall)
-        val balls=ballsSmall.map{
+        val detectedBalls=ballsSmall.map{
             Ball(
                 PointF((it.center.x/scale).toFloat(),(it.center.y/scale).toFloat()),
                 (it.radius/scale).toFloat(),
@@ -43,8 +47,15 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
         }
         work.release()
 
+        val balls=smoothBalls(detectedBalls)
         val pockets=TrajectoryEngine.pockets(table)
+        val now=android.os.SystemClock.elapsedRealtime()
+
         if(balls.size<2 || balls.none{it.cue}) {
+            val cached=lastGood
+            if(cached!=null && now-lastGoodAt<850L){
+                return cached.copy(message="rastreio temporário • ${balls.size} bolas atuais")
+            }
             return AnalysisResult(
                 table,balls,pockets,emptyList(),
                 message="$tableSource • ${balls.size} bolas • sens ${sensitivityProvider()}"
@@ -52,12 +63,42 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
         }
 
         val trajectories=TrajectoryEngine.calculate(table,balls,pockets,direct,banks,secondary)
-        return AnalysisResult(
+        val result=AnalysisResult(
             table,balls,pockets,trajectories,
             message="$tableSource • ${balls.size} bolas • ${trajectories.size} rotas"
         )
+        if(trajectories.isNotEmpty()){
+            lastGood=result
+            lastGoodAt=now
+        }
+        return result
     }
 
+    private fun smoothBalls(current:List<Ball>):List<Ball>{
+        if(current.isEmpty()) return current
+        if(lastBalls.isEmpty()){
+            lastBalls=current
+            return current
+        }
+
+        val smoothed=current.map{b->
+            val match=lastBalls
+                .filter{it.cue==b.cue}
+                .minByOrNull{Geometry.dist(it.center,b.center)}
+            if(match!=null){
+                val d=Geometry.dist(match.center,b.center)
+                val threshold=max(28f,b.radius*2.6f)
+                if(d<threshold){
+                    val x=match.center.x*.35f+b.center.x*.65f
+                    val y=match.center.y*.35f+b.center.y*.65f
+                    val r=match.radius*.35f+b.radius*.65f
+                    b.copy(center=PointF(x,y),radius=r)
+                } else b
+            } else b
+        }
+        lastBalls=smoothed
+        return smoothed
+    }
     private fun detectTable(rgba:Mat):RectF?{
         val rgb=Mat()
         val hsv=Mat()
