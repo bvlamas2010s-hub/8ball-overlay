@@ -5,6 +5,10 @@ on:
   push:
     branches: [ "main" ]
 
+concurrency:
+  group: android-apk-main
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -39,13 +43,25 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+      - name: Restore stable signing key
+        shell: bash
+        run: |
+          base64 --decode ci/trajectory-debug-keystore.b64 > ci/trajectory-debug.jks
+          keytool -list -keystore ci/trajectory-debug.jks -storepass trajectory123 >/dev/null
+
+      - name: Build and lint debug APK
+        run: |
+          gradle :app:assembleDebug :app:lintDebug --stacktrace
+
+      - name: Verify APK exists
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: trajectory-overlay-debug-apk
+          name: trajectory-overlay-v0.3-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
