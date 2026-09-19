@@ -51,7 +51,7 @@ jobs:
 
       - name: Build and lint debug APK
         run: |
-          gradle :app:assembleDebug :app:lintDebug --stacktrace
+          gradle :app:assembleDebug :app:testDebugUnitTest :app:lintDebug --stacktrace
 
       - name: Verify APK exists
         run: |
