@@ -32,33 +32,43 @@ public final class VisionEngine {
         Table table = findTable(f);
         if (table == null) {
             if (bmp != original) bmp.recycle();
-            return invalid(VisionResult.State.NO_TABLE, "no stable felt ROI");
+            return invalid(VisionResult.State.NO_TABLE, "capture ok; table ROI not found");
         }
 
-        Cue cue = findCueBall(f, table);
-        if (cue == null) {
-            VisionResult r = invalid(VisionResult.State.NO_CUE_BALL, "table ok; cue ball not reliable");
+        List<Cue> cues = findCueBallCandidates(f, table);
+        if (cues.isEmpty()) {
+            VisionResult r = invalid(VisionResult.State.NO_CUE_BALL, "table ok; cue candidates=0");
             r.roi = table.roi;
-            r.confidence = table.confidence * 0.7f;
+            r.confidence = table.confidence * .7f;
             if (bmp != original) bmp.recycle();
             return rescale(r, down);
         }
 
+        CueAim pair = null;
+        for (Cue cue : cues) {
+            Aim aim = findAimGuide(f, table, cue);
+            if (aim == null) continue;
+            float pairScore = cue.score * aim.score;
+            if (pair == null || pairScore > pair.score) pair = new CueAim(cue, aim, pairScore);
+        }
+
+        if (pair == null) {
+            Cue bestCue = cues.get(0);
+            VisionResult r = invalid(VisionResult.State.NO_GUIDE,
+                    "table+cue ok; no thin aiming guide • cues=" + cues.size());
+            r.roi = table.roi;
+            r.cueBall = new PointF(bestCue.x, bestCue.y);
+            r.cueRadius = bestCue.r;
+            r.confidence = Math.min(table.confidence, bestCue.score);
+            if (bmp != original) bmp.recycle();
+            return rescale(r, down);
+        }
+
+        Cue cue = pair.cue;
+        Aim aim = pair.aim;
         List<VisionResult.Ball> balls = findObjectBalls(f, table, cue);
-        Aim aim = findAimGuide(f, table, cue);
-        if (aim == null) {
-            VisionResult r = invalid(VisionResult.State.NO_GUIDE, "table+cue ok; guide not reliable");
-            r.roi = table.roi;
-            r.cueBall = new PointF(cue.x, cue.y);
-            r.cueRadius = cue.r;
-            r.balls.addAll(balls);
-            r.confidence = Math.min(table.confidence, cue.score);
-            if (bmp != original) bmp.recycle();
-            return rescale(r, down);
-        }
-
         VisionResult out = buildGeometry(table, cue, balls, aim);
-        out.confidence = Math.min(Math.min(table.confidence, cue.score), aim.score);
+        out.confidence = Math.min(table.confidence, Math.min(cue.score, aim.score));
         out.debug = "table=" + fmt(table.confidence) + " cue=" + fmt(cue.score)
                 + " guide=" + fmt(aim.score) + " balls=" + balls.size();
         if (bmp != original) bmp.recycle();
@@ -79,143 +89,141 @@ public final class VisionEngine {
     }
 
     private Table findTable(PixelFrame f) {
-        // Dominant saturated hue in the central gameplay area.
         int[] hist = new int[36];
-        int x0 = (int) (f.w * 0.06f), x1 = (int) (f.w * 0.94f);
-        int y0 = (int) (f.h * 0.12f), y1 = (int) (f.h * 0.90f);
-        for (int y = y0; y < y1; y += 4) {
-            for (int x = x0; x < x1; x += 4) {
-                HSV c = f.hsv(x, y);
-                if (c.s > 0.28f && c.v > 0.16f && c.v < 0.96f) {
-                    hist[Math.min(35, (int) (c.h / 10f))]++;
-                }
+        int x0 = (int)(f.w * .06f), x1 = (int)(f.w * .94f);
+        int y0 = (int)(f.h * .12f), y1 = (int)(f.h * .90f);
+
+        for (int y=y0; y<y1; y+=4) {
+            for (int x=x0; x<x1; x+=4) {
+                HSV c=f.hsv(x,y);
+                if(c.s>.28f && c.v>.16f && c.v<.96f)
+                    hist[Math.min(35,(int)(c.h/10f))]++;
             }
         }
-        int bestBin = 0;
-        for (int i = 1; i < hist.length; i++) if (hist[i] > hist[bestBin]) bestBin = i;
-        if (hist[bestBin] < 80) return null;
-        float hue = bestBin * 10f + 5f;
+        int bestBin=0;
+        for(int i=1;i<hist.length;i++) if(hist[i]>hist[bestBin]) bestBin=i;
+        if(hist[bestBin]<80) return null;
+        float hue=bestBin*10f+5f;
 
-        // For each row, locate the longest felt-like horizontal run.
-        List<RowRun> rows = new ArrayList<>();
-        for (int y = y0; y < y1; y += 2) {
-            int bestStart = -1, bestEnd = -1, curStart = -1;
-            for (int x = x0; x <= x1; x += 2) {
-                boolean ok = x < x1 && isFelt(f.hsv(x, y), hue);
-                if (ok && curStart < 0) curStart = x;
-                if ((!ok || x >= x1 - 2) && curStart >= 0) {
-                    int end = ok ? x : x - 2;
-                    if (bestStart < 0 || end - curStart > bestEnd - bestStart) {
-                        bestStart = curStart; bestEnd = end;
-                    }
-                    curStart = -1;
-                }
-            }
-            if (bestStart >= 0 && bestEnd - bestStart > f.w * 0.42f) {
-                rows.add(new RowRun(y, bestStart, bestEnd));
+        // Use row coverage instead of uninterrupted runs. Balls, guide-lines and
+        // specular highlights can split a valid table row into several pieces.
+        int bestTop=-1,bestBottom=-1,bestRows=0;
+        int curTop=-1,curBottom=-1,curRows=0,prevY=-999;
+        for(int y=y0;y<y1;y+=2){
+            int total=0,felt=0;
+            for(int x=x0;x<x1;x+=2){ total++; if(isFelt(f.hsv(x,y),hue)) felt++; }
+            float frac=felt/(float)Math.max(1,total);
+            if(frac>.45f){
+                if(curTop<0 || y-prevY>4){curTop=y;curRows=0;}
+                curBottom=y;curRows++;prevY=y;
+                if(curRows>bestRows){bestRows=curRows;bestTop=curTop;bestBottom=curBottom;}
             }
         }
-        if (rows.size() < Math.max(20, f.h / 20)) return null;
+        if(bestRows<20 || bestTop<0) return null;
 
-        // Largest vertically continuous group of qualifying rows.
-        List<RowRun> bestGroup = new ArrayList<>(), group = new ArrayList<>();
-        int prevY = -99;
-        for (RowRun rr : rows) {
-            if (rr.y - prevY > 4 && !group.isEmpty()) {
-                if (group.size() > bestGroup.size()) bestGroup = new ArrayList<>(group);
-                group.clear();
-            }
-            group.add(rr); prevY = rr.y;
-        }
-        if (group.size() > bestGroup.size()) bestGroup = group;
-        if (bestGroup.size() < 15) return null;
-
-        List<Integer> starts = new ArrayList<>(), ends = new ArrayList<>();
-        for (RowRun rr : bestGroup) { starts.add(rr.start); ends.add(rr.end); }
-        Collections.sort(starts); Collections.sort(ends);
-        int left = percentile(starts, 0.30f);
-        int right = percentile(ends, 0.70f);
-        int top = bestGroup.get(0).y;
-        int bottom = bestGroup.get(bestGroup.size() - 1).y;
-        if (right - left < f.w * 0.42f || bottom - top < f.h * 0.18f) return null;
-
-        RectF roi = new RectF(left, top, right, bottom);
-        float aspect = roi.width() / Math.max(1f, roi.height());
-        if (aspect < 1.2f || aspect > 4.2f) return null;
-
-        int total = 0, felt = 0;
-        float sat = 0f, val = 0f;
-        for (int y = top; y <= bottom; y += 6) {
-            for (int x = left; x <= right; x += 6) {
-                HSV c = f.hsv(x, y);
-                total++;
-                if (isFelt(c, hue)) { felt++; sat += c.s; val += c.v; }
+        int bestLeft=-1,bestRight=-1,bestCols=0;
+        int curLeft=-1,curRight=-1,curCols=0,prevX=-999;
+        for(int x=x0;x<x1;x+=2){
+            int total=0,felt=0;
+            for(int y=bestTop;y<=bestBottom;y+=2){total++;if(isFelt(f.hsv(x,y),hue))felt++;}
+            float frac=felt/(float)Math.max(1,total);
+            if(frac>.40f){
+                if(curLeft<0 || x-prevX>4){curLeft=x;curCols=0;}
+                curRight=x;curCols++;prevX=x;
+                if(curCols>bestCols){bestCols=curCols;bestLeft=curLeft;bestRight=curRight;}
             }
         }
-        float coverage = total == 0 ? 0f : felt / (float) total;
-        if (coverage < 0.44f) return null;
-        float conf = clamp01((coverage - 0.40f) / 0.32f);
-        float avgS = felt == 0 ? .5f : sat / felt;
-        float avgV = felt == 0 ? .5f : val / felt;
-        return new Table(roi, hue, avgS, avgV, conf);
+        if(bestCols<30 || bestLeft<0) return null;
+
+        RectF roi=new RectF(bestLeft,bestTop,bestRight,bestBottom);
+        float aspect=roi.width()/Math.max(1f,roi.height());
+        if(roi.width()<f.w*.42f || roi.height()<f.h*.22f || aspect<1.35f || aspect>3.40f) return null;
+
+        int total=0,felt=0;float sat=0,val=0;
+        for(int y=bestTop;y<=bestBottom;y+=6){
+            for(int x=bestLeft;x<=bestRight;x+=6){
+                HSV c=f.hsv(x,y);total++;
+                if(isFelt(c,hue)){felt++;sat+=c.s;val+=c.v;}
+            }
+        }
+        float coverage=felt/(float)Math.max(1,total);
+        if(coverage<.44f) return null;
+        float conf=clamp01((coverage-.40f)/.35f);
+        float avgS=felt==0?.5f:sat/felt;
+        float avgV=felt==0?.5f:val/felt;
+        return new Table(roi,hue,avgS,avgV,conf);
     }
 
-    private Cue findCueBall(PixelFrame f, Table t) {
-        int left = (int) t.roi.left, right = (int) t.roi.right;
-        int top = (int) t.roi.top, bottom = (int) t.roi.bottom;
-        int rw = Math.max(1, right - left);
-        int minR = Math.max(4, Math.round(rw * 0.010f));
-        int maxR = Math.max(minR + 2, Math.round(rw * 0.030f));
+    private List<Cue> findCueBallCandidates(PixelFrame f, Table t) {
+        int left=(int)t.roi.left,right=(int)t.roi.right;
+        int top=(int)t.roi.top,bottom=(int)t.roi.bottom;
+        int rw=Math.max(1,right-left);
+        int baseR=Math.max(4,Math.round(rw*.015f));
+        List<Cue> all=new ArrayList<>();
 
-        int iw = f.w + 1;
-        int[] integral = new int[(f.w + 1) * (f.h + 1)];
-        for (int y = 0; y < f.h; y++) {
-            int rowSum = 0;
-            int base = (y + 1) * iw;
-            int prev = y * iw;
-            for (int x = 0; x < f.w; x++) {
-                HSV c = f.hsv(x, y);
-                boolean white = c.v > 0.72f && c.s < 0.30f;
-                rowSum += white ? 1 : 0;
-                integral[base + x + 1] = integral[prev + x + 1] + rowSum;
-            }
-        }
+        for(int dr=-1;dr<=1;dr++){
+            int r=Math.max(4,baseR+dr);
+            for(int y=top+r*2;y<=bottom-r*2;y+=2){
+                for(int x=left+r*2;x<=right-r*2;x+=2){
+                    HSV center=f.hsv(x,y);
+                    if(center.v<.45f || center.s>.50f) continue;
 
-        Cue best = null;
-        int step = 3;
-        for (int r = minR; r <= maxR; r += 2) {
-            int area = (2 * r + 1) * (2 * r + 1);
-            for (int y = top + r + 2; y <= bottom - r - 2; y += step) {
-                for (int x = left + r + 2; x <= right - r - 2; x += step) {
-                    int white = sumIntegral(integral, iw, x-r, y-r, x+r, y+r);
-                    float squareDensity = white / (float) area;
-                    if (squareDensity < 0.47f) continue;
+                    float sumS=0f;int n=0,pale=0,saturated=0;
+                    HSV cc=f.hsv(x,y);sumS+=cc.s;n++;
+                    if(cc.v>.52f&&cc.s<.40f)pale++;
+                    if(cc.s>.45f)saturated++;
 
-                    int inside = 0, insideWhite = 0, ring = 0, ringWhite = 0;
-                    for (int i = 0; i < 48; i++) {
-                        double a = i * (Math.PI * 2.0 / 48.0);
-                        int ix = Math.round(x + (float)Math.cos(a) * r * 0.62f);
-                        int iy = Math.round(y + (float)Math.sin(a) * r * 0.62f);
-                        HSV ci = f.hsv(ix, iy);
-                        inside++; if (ci.v > .70f && ci.s < .33f) insideWhite++;
-                        int rx = Math.round(x + (float)Math.cos(a) * r * 1.45f);
-                        int ry = Math.round(y + (float)Math.sin(a) * r * 1.45f);
-                        if (t.roi.contains(rx, ry)) {
-                            HSV cr = f.hsv(rx, ry);
-                            ring++; if (cr.v > .70f && cr.s < .33f) ringWhite++;
+                    float[] radii={r*.45f,r*.80f};
+                    for(float rr:radii){
+                        for(int i=0;i<20;i++){
+                            double a=i*Math.PI*2/20.0;
+                            int xx=Math.round(x+(float)Math.cos(a)*rr);
+                            int yy=Math.round(y+(float)Math.sin(a)*rr);
+                            HSV c=f.hsv(xx,yy);sumS+=c.s;n++;
+                            if(c.v>.52f&&c.s<.40f)pale++;
+                            if(c.s>.45f)saturated++;
                         }
                     }
-                    float core = insideWhite / (float)Math.max(1, inside);
-                    float ringPenalty = ringWhite / (float)Math.max(1, ring);
-                    float feltRing = ringFeltFraction(f, t, x, y, r * 1.7f);
-                    float score = squareDensity * .45f + core * .40f + feltRing * .25f - ringPenalty * .20f;
-                    if (score > .61f && (best == null || score > best.score)) {
-                        best = new Cue(x, y, r, clamp01(score));
+                    float paleFrac=pale/(float)n;
+                    float satFrac=saturated/(float)n;
+                    float avgInsideS=sumS/n;
+                    if(paleFrac<.45f || satFrac>.22f || avgInsideS>.18f) continue;
+
+                    float outerS=0f;int ring=0,felt=0;
+                    for(int i=0;i<36;i++){
+                        double a=i*Math.PI*2/36.0;
+                        float rr=r*1.55f;
+                        int xx=Math.round(x+(float)Math.cos(a)*rr);
+                        int yy=Math.round(y+(float)Math.sin(a)*rr);
+                        if(!t.roi.contains(xx,yy)) continue;
+                        HSV c=f.hsv(xx,yy);outerS+=c.s;ring++;
+                        if(isFelt(c,t.hue))felt++;
                     }
+                    if(ring<24) continue;
+                    outerS/=ring;
+                    float feltFrac=felt/(float)ring;
+                    float edgeSat=outerS-avgInsideS;
+                    if(feltFrac<.50f || edgeSat<.12f) continue;
+
+                    float score=paleFrac*.35f+feltFrac*.15f
+                            +Math.min(.5f,edgeSat)*.20f
+                            +(1f-avgInsideS)*.20f-satFrac*.80f;
+                    if(score>.42f) all.add(new Cue(x,y,r,clamp01(score)));
                 }
             }
         }
-        return best;
+
+        all.sort((a,b)->Float.compare(b.score,a.score));
+        List<Cue> unique=new ArrayList<>();
+        for(Cue c:all){
+            boolean near=false;
+            for(Cue u:unique){
+                if(dist(c.x,c.y,u.x,u.y)<baseR*1.25f){near=true;break;}
+            }
+            if(!near) unique.add(c);
+            if(unique.size()>=12) break;
+        }
+        return unique;
     }
 
     private List<VisionResult.Ball> findObjectBalls(PixelFrame f, Table t, Cue cue) {
@@ -286,53 +294,47 @@ public final class VisionEngine {
 
     private Aim findAimGuide(PixelFrame f, Table t, Cue cue) {
         Aim best=null;
-        float maxLen=Math.min(t.roi.width(),t.roi.height())*.68f;
+        float sideOffset=Math.max(2f,cue.r*.70f);
         for(int deg=0;deg<360;deg+=2){
             float a=(float)Math.toRadians(deg);
-            float dx=(float)Math.cos(a),dy=(float)Math.sin(a);
-            int samples=0,hits=0,strong=0;
-            float weighted=0f,weights=0f;
-            for(float rr=cue.r*1.55f;rr<maxLen;rr+=2.2f){
-                int x=Math.round(cue.x+dx*rr),y=Math.round(cue.y+dy*rr);
-                if(!t.roi.contains(x,y))break;
-                HSV c=f.hsv(x,y);
-                boolean guide=(c.v>.67f&&c.s<.38f) || (c.v>Math.min(.98f,t.val+.24f)&&c.s<t.sat*.75f);
-                float weight=1f/(1f+rr/(cue.r*8f));
-                samples++;weights+=weight;
-                if(guide){hits++;weighted+=weight;if(c.v>.80f&&c.s<.25f)strong++;}
-                if(samples>100)break;
-            }
-            if(samples<10)continue;
-            float ratio=hits/(float)samples;
-            float wr=weighted/Math.max(.001f,weights);
-            float score=wr*.72f+Math.min(1f,strong/8f)*.18f+Math.min(.25f,ratio)*.40f;
-            if(score>.25f && (best==null||score>best.score)) best=new Aim(a,score);
+            float center=guideLineScore(f,t,cue,a,0f);
+            float side=(guideLineScore(f,t,cue,a,sideOffset)+guideLineScore(f,t,cue,a,-sideOffset))*.5f;
+            float thin=Math.max(0f,center-side);
+            float score=center*.62f+thin*.75f;
+            if(best==null || score>best.score) best=new Aim(a,score);
         }
-        if(best==null||best.score<.31f)return null;
-        // Sub-degree refinement around the coarse winner.
+        if(best==null || best.score<.30f) return null;
+
         Aim refined=best;
         for(float off=-2f;off<=2f;off+=.25f){
             float a=best.angle+(float)Math.toRadians(off);
-            float s=guideScore(f,t,cue,a);
-            if(s>refined.score)refined=new Aim(a,s);
+            float center=guideLineScore(f,t,cue,a,0f);
+            float side=(guideLineScore(f,t,cue,a,sideOffset)+guideLineScore(f,t,cue,a,-sideOffset))*.5f;
+            float thin=Math.max(0f,center-side);
+            float score=center*.62f+thin*.75f;
+            if(score>refined.score) refined=new Aim(a,score);
         }
         return refined;
     }
 
-    private float guideScore(PixelFrame f, Table t, Cue cue, float a){
+    private float guideLineScore(PixelFrame f, Table t, Cue cue, float a, float offset){
         float dx=(float)Math.cos(a),dy=(float)Math.sin(a);
+        float px=-dy,py=dx;
         float maxLen=Math.min(t.roi.width(),t.roi.height())*.68f;
-        float weighted=0,weights=0;int strong=0,samples=0;
+        float weighted=0f,weights=0f;int strong=0,samples=0;
         for(float rr=cue.r*1.55f;rr<maxLen;rr+=2f){
-            int x=Math.round(cue.x+dx*rr),y=Math.round(cue.y+dy*rr);
+            int x=Math.round(cue.x+dx*rr+px*offset);
+            int y=Math.round(cue.y+dy*rr+py*offset);
             if(!t.roi.contains(x,y))break;
             HSV c=f.hsv(x,y);
-            boolean guide=(c.v>.67f&&c.s<.38f)||(c.v>Math.min(.98f,t.val+.24f)&&c.s<t.sat*.75f);
+            boolean guide=(c.v>.67f&&c.s<.38f)
+                    ||(c.v>Math.min(.98f,t.val+.24f)&&c.s<t.sat*.75f);
             float wt=1f/(1f+rr/(cue.r*8f));weights+=wt;samples++;
             if(guide){weighted+=wt;if(c.v>.80f&&c.s<.25f)strong++;}
             if(samples>100)break;
         }
-        return weighted/Math.max(.001f,weights)*.82f + Math.min(1f,strong/8f)*.18f;
+        if(samples<8) return 0f;
+        return weighted/Math.max(.001f,weights)*.82f+Math.min(1f,strong/8f)*.18f;
     }
 
     private VisionResult buildGeometry(Table t, Cue cue, List<VisionResult.Ball> balls, Aim aim) {
@@ -414,6 +416,7 @@ public final class VisionEngine {
     private static final class Table {RectF roi;float hue,sat,val,confidence;Table(RectF r,float h,float s,float v,float c){roi=r;hue=h;sat=s;val=v;confidence=c;}}
     private static final class Cue {float x,y,r,score;Cue(float x,float y,float r,float s){this.x=x;this.y=y;this.r=r;score=s;}}
     private static final class Aim {float angle,score;Aim(float a,float s){angle=a;score=s;}}
+    private static final class CueAim {Cue cue;Aim aim;float score;CueAim(Cue c,Aim a,float s){cue=c;aim=a;score=s;}}
     private static final class HSV {float h,s,v;HSV(float h,float s,float v){this.h=h;this.s=s;this.v=v;}}
 
     private static final class PixelFrame {
