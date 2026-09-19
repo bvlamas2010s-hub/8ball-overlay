@@ -138,6 +138,14 @@ class CaptureOverlayService: Service() {
             return
         }
 
+        val engineError=TrajectoryEngine.selfTest()
+        if(engineError!=null){
+            val msg="ERRO interno: $engineError"
+            overlay?.update(AnalysisResult(RectF(0f,0f,width.toFloat(),height.toFloat()),emptyList(),emptyList(),emptyList(),message=msg))
+            updateNotification(msg)
+            return
+        }
+
         reader=ImageReader.newInstance(width,height,PixelFormat.RGBA_8888,3)
         val mgr=getSystemService(MediaProjectionManager::class.java)
         projection=mgr.getMediaProjection(code,data).also{it.registerCallback(projectionCallback,mainHandler)}
