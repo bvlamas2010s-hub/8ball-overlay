@@ -101,7 +101,7 @@ class MainActivity : AppCompatActivity() {
         })
         val sensText = TextView(this).apply {
             setTextColor(Color.LTGRAY)
-            text = "\${Prefs.sensitivity(this@MainActivity)} (menor = detecta mais)"
+            text = "${Prefs.sensitivity(this@MainActivity)} (menor = detecta mais)"
         }
         val seek = SeekBar(this).apply {
             max = 20
@@ -130,7 +130,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateLocalStatus() {
         val overlayOk = Settings.canDrawOverlays(this)
-        status.text = "Overlay: \${if (overlayOk) "OK" else "SEM PERMISSÃO"} • OpenCV: \${if (openCvReady) "OK" else "FALHOU"}"
+        status.text = "Overlay: ${if (overlayOk) "OK" else "SEM PERMISSÃO"} • OpenCV: ${if (openCvReady) "OK" else "FALHOU"}"
     }
 
     private fun button(text: String, onClick: () -> Unit) = Button(this).apply {
