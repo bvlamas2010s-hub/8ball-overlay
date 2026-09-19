@@ -58,14 +58,13 @@ public final class VisionEngine {
             Cue bestCue = cues.get(0);
             List<VisionResult.Ball> balls = findObjectBalls(f, table, bestCue);
             VisionResult r = invalid(VisionResult.State.NO_GUIDE,
-                    "table+cue ok; route map active • cues=" + cues.size());
+                    "table+cue ok; waiting for live aim guide • cues=" + cues.size());
             r.roi = table.roi;
             r.cueBall = new PointF(bestCue.x, bestCue.y);
             r.cueRadius = bestCue.r;
             r.balls.addAll(balls);
-            buildRouteMap(r, table, bestCue, balls);
             r.debug = "table=" + fmt(table.confidence) + " cue=" + fmt(bestCue.score)
-                    + " balls=" + balls.size() + " routes=" + r.routes.size() + " • no live guide";
+                    + " balls=" + balls.size() + " • no simulation without aim";
             r.confidence = Math.min(table.confidence, bestCue.score);
             if (bmp != original) bmp.recycle();
             return rescale(r, down);
@@ -75,11 +74,11 @@ public final class VisionEngine {
         Aim aim = pair.aim;
         List<VisionResult.Ball> balls = findObjectBalls(f, table, cue);
         VisionResult out = buildGeometry(table, cue, balls, aim);
-        buildRouteMap(out, table, cue, balls);
+        simulateShot(out, table, cue, balls, aim);
         out.confidence = Math.min(table.confidence, Math.min(cue.score, aim.score));
         out.debug = "table=" + fmt(table.confidence) + " cue=" + fmt(cue.score)
-                + " guide=" + fmt(aim.score) + " balls=" + balls.size()
-                + " routes=" + out.routes.size();
+                + " guide=" + fmt(clamp01(aim.score)) + " balls=" + balls.size()
+                + " moving=" + out.trajectories.size();
         if (bmp != original) bmp.recycle();
         return rescale(out, down);
     }
@@ -395,7 +394,7 @@ public final class VisionEngine {
             float score=center*.62f+thin*.75f;
             if(score>refined.score) refined=new Aim(a,score);
         }
-        return refined;
+        return new Aim(refined.angle, clamp01(refined.score));
     }
 
     private float guideLineScore(PixelFrame f, Table t, Cue cue, float a, float offset){
@@ -418,243 +417,181 @@ public final class VisionEngine {
         return weighted/Math.max(.001f,weights)*.82f+Math.min(1f,strong/8f)*.18f;
     }
 
-    private void buildRouteMap(VisionResult out, Table t, Cue cue, List<VisionResult.Ball> balls) {
-        if (out == null || t == null || cue == null || balls == null || balls.isEmpty()) return;
+    /**
+     * Predicts the current shot only. The cue ball starts along the detected game
+     * guide; collisions can wake stationary balls, which can then collide with
+     * others and rebound from cushions. This produces a physical collision tree,
+     * not arbitrary ball-to-pocket suggestions.
+     */
+    private void simulateShot(
+            VisionResult out,
+            Table t,
+            Cue cue,
+            List<VisionResult.Ball> balls,
+            Aim aim
+    ) {
+        if (out == null || t == null || cue == null || aim == null) return;
 
-        List<RouteCandidate> directCandidates = new ArrayList<>();
-        List<RouteCandidate> bankCandidates = new ArrayList<>();
-        PointF[] pockets = pocketCenters(t, cue.r);
         float nominalR = Math.max(4f, cue.r);
-        int color = 0;
+        List<SimBall> sim = new ArrayList<>();
 
-        for (int bi = 0; bi < balls.size(); bi++) {
-            VisionResult.Ball target = balls.get(bi);
-            if (target == null || target.score < .62f) continue;
+        SimBall white = new SimBall(cue.x, cue.y, nominalR, true, 0);
+        float initialSpeed = Math.max(3.6f, nominalR * .72f);
+        white.vx = (float)Math.cos(aim.angle) * initialSpeed;
+        white.vy = (float)Math.sin(aim.angle) * initialSpeed;
+        white.ensureTrace();
+        sim.add(white);
 
-            for (int pi = 0; pi < pockets.length; pi++) {
-                PointF pocket = pockets[pi];
+        int color = 1;
+        for (VisionResult.Ball b : balls) {
+            float rr = Math.max(nominalR * .82f, Math.min(nominalR * 1.18f, b.r));
+            if (dist(b.x, b.y, cue.x, cue.y) < nominalR * 2.0f) continue;
+            sim.add(new SimBall(b.x, b.y, rr, false, color++));
+            if (sim.size() >= 16) break;
+        }
 
-                float ovx = pocket.x - target.x;
-                float ovy = pocket.y - target.y;
-                float objectLen = (float)Math.hypot(ovx, ovy);
-                if (objectLen < nominalR * 3.5f) continue;
+        final float friction = .9945f;
+        final float stopSpeed = .10f;
+        final int maxSteps = 260;
+        final int maxBounces = 3;
 
-                float oux = ovx / objectLen;
-                float ouy = ovy / objectLen;
-                float contactDistance = Math.max(nominalR + target.r, nominalR * 1.90f);
+        for (int step = 0; step < maxSteps; step++) {
+            boolean anyMoving = false;
 
-                PointF ghost = new PointF(
-                        target.x - oux * contactDistance,
-                        target.y - ouy * contactDistance
-                );
+            for (SimBall b : sim) {
+                if (b.pocketed) continue;
+                float speed = b.speed();
+                if (speed <= stopSpeed) {
+                    b.vx = b.vy = 0f;
+                    continue;
+                }
+                anyMoving = true;
 
-                if (!insidePlayable(t.roi, ghost, nominalR * .75f)) continue;
+                b.x += b.vx;
+                b.y += b.vy;
 
-                float ivx = ghost.x - cue.x;
-                float ivy = ghost.y - cue.y;
-                float incomingLen = (float)Math.hypot(ivx, ivy);
-                if (incomingLen < nominalR * 3f) continue;
-                float iux = ivx / incomingLen;
-                float iuy = ivy / incomingLen;
+                if (fallsInPocket(b, t.roi, nominalR)) {
+                    b.pocketed = true;
+                    b.vx = b.vy = 0f;
+                    b.addTrace(true);
+                    continue;
+                }
 
-                // If this is too thin, a tiny detector error makes the path wildly wrong.
-                float cutCos = iux * oux + iuy * ouy;
-                if (cutCos < .50f) continue; // ~60 degree maximum cut.
+                boolean bounced = false;
+                float left = t.roi.left + b.r * .20f;
+                float right = t.roi.right - b.r * .20f;
+                float top = t.roi.top + b.r * .20f;
+                float bottom = t.roi.bottom - b.r * .20f;
 
-                if (!segmentClear(cue.x, cue.y, ghost.x, ghost.y, balls, target,
-                        nominalR * 1.72f)) continue;
-                if (!segmentClear(target.x, target.y, pocket.x, pocket.y, balls, target,
-                        nominalR * 1.55f)) continue;
+                if (b.x < left) {
+                    b.x = left + (left - b.x);
+                    b.vx = Math.abs(b.vx) * .94f;
+                    bounced = true;
+                } else if (b.x > right) {
+                    b.x = right - (b.x - right);
+                    b.vx = -Math.abs(b.vx) * .94f;
+                    bounced = true;
+                }
 
-                float score = routeScore(incomingLen, objectLen, false, t)
-                        * (.58f + .42f * cutCos)
-                        * (.72f + .28f * target.score);
+                if (b.y < top) {
+                    b.y = top + (top - b.y);
+                    b.vy = Math.abs(b.vy) * .94f;
+                    bounced = true;
+                } else if (b.y > bottom) {
+                    b.y = bottom - (b.y - bottom);
+                    b.vy = -Math.abs(b.vy) * .94f;
+                    bounced = true;
+                }
 
-                VisionResult.Route direct = new VisionResult.Route((color++) % 6, false, score);
-                direct.points.add(new PointF(cue.x, cue.y));
-                direct.points.add(ghost);
-                direct.points.add(new PointF(target.x, target.y));
-                direct.points.add(pocket);
-                directCandidates.add(new RouteCandidate(direct, bi, pi));
+                if (bounced) {
+                    b.bounces++;
+                    b.addTrace(true);
+                    if (b.bounces > maxBounces) {
+                        b.vx = b.vy = 0f;
+                    }
+                }
 
-                // One-cushion routes are much less tolerant of detection noise.
-                // Only keep very clean candidates and use them only as secondary options.
-                if (cutCos < .62f) continue;
-                for (int rail = 0; rail < 4; rail++) {
-                    Bank bank = bankPoint(target.x, target.y, pocket, t.roi, rail, nominalR);
-                    if (bank == null) continue;
+                b.vx *= friction;
+                b.vy *= friction;
+            }
 
-                    float bx = bank.point.x, by = bank.point.y;
-                    float firstLen = dist(target.x, target.y, bx, by);
-                    float secondLen = dist(bx, by, pocket.x, pocket.y);
-                    if (firstLen < nominalR * 5f || secondLen < nominalR * 5f) continue;
+            // Equal-mass ball collisions.
+            for (int i = 0; i < sim.size(); i++) {
+                SimBall a = sim.get(i);
+                if (a.pocketed) continue;
+                for (int j = i + 1; j < sim.size(); j++) {
+                    SimBall b = sim.get(j);
+                    if (b.pocketed) continue;
 
-                    float bux = (bx - target.x) / Math.max(.001f, firstLen);
-                    float buy = (by - target.y) / Math.max(.001f, firstLen);
-                    PointF bankGhost = new PointF(
-                            target.x - bux * contactDistance,
-                            target.y - buy * contactDistance
-                    );
-                    if (!insidePlayable(t.roi, bankGhost, nominalR * .75f)) continue;
+                    float dx = b.x - a.x;
+                    float dy = b.y - a.y;
+                    float minD = a.r + b.r;
+                    float d2 = dx * dx + dy * dy;
+                    if (d2 <= .0001f || d2 > minD * minD) continue;
 
-                    float bivx = bankGhost.x - cue.x;
-                    float bivy = bankGhost.y - cue.y;
-                    float biLen = (float)Math.hypot(bivx, bivy);
-                    if (biLen < nominalR * 3f) continue;
-                    float bankCutCos = (bivx / biLen) * bux + (bivy / biLen) * buy;
-                    if (bankCutCos < .62f) continue;
+                    float d = (float)Math.sqrt(d2);
+                    float nx = dx / d;
+                    float ny = dy / d;
 
-                    if (!segmentClear(cue.x, cue.y, bankGhost.x, bankGhost.y, balls, target,
-                            nominalR * 1.72f)) continue;
-                    if (!segmentClear(target.x, target.y, bx, by, balls, target,
-                            nominalR * 1.55f)) continue;
-                    if (!segmentClear(bx, by, pocket.x, pocket.y, balls, target,
-                            nominalR * 1.55f)) continue;
+                    float rel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+                    if (rel <= 0f) continue;
 
-                    float bankScore = routeScore(biLen, firstLen + secondLen, true, t)
-                            * (.55f + .45f * bankCutCos)
-                            * (.72f + .28f * target.score);
+                    // Separate overlap first to avoid repeated fake collisions.
+                    float overlap = minD - d + .05f;
+                    a.x -= nx * overlap * .5f;
+                    a.y -= ny * overlap * .5f;
+                    b.x += nx * overlap * .5f;
+                    b.y += ny * overlap * .5f;
 
-                    if (bankScore < .42f) continue;
+                    float aN = a.vx * nx + a.vy * ny;
+                    float bN = b.vx * nx + b.vy * ny;
+                    float transfer = (aN - bN) * .965f;
 
-                    VisionResult.Route bankRoute =
-                            new VisionResult.Route((color++) % 6, true, bankScore);
-                    bankRoute.points.add(new PointF(cue.x, cue.y));
-                    bankRoute.points.add(bankGhost);
-                    bankRoute.points.add(new PointF(target.x, target.y));
-                    bankRoute.points.add(bank.point);
-                    bankRoute.points.add(pocket);
-                    bankCandidates.add(new RouteCandidate(bankRoute, bi, pi));
+                    a.vx -= transfer * nx;
+                    a.vy -= transfer * ny;
+                    b.vx += transfer * nx;
+                    b.vy += transfer * ny;
+
+                    a.ensureTrace();
+                    b.ensureTrace();
+                    a.addTrace(true);
+                    b.addTrace(true);
                 }
             }
+
+            for (SimBall b : sim) {
+                if (!b.pocketed && b.speed() > stopSpeed) {
+                    b.ensureTrace();
+                    b.addTrace(false);
+                }
+            }
+
+            if (!anyMoving) break;
         }
 
-        directCandidates.sort((a, b) -> Float.compare(b.route.score, a.route.score));
-        bankCandidates.sort((a, b) -> Float.compare(b.route.score, a.route.score));
-
-        boolean[] usedTarget = new boolean[Math.max(1, balls.size())];
-
-        // Correctness first: at most 4 direct routes, one per target ball.
-        for (RouteCandidate c : directCandidates) {
-            if (out.routes.size() >= 4) break;
-            if (usedTarget[c.ballIndex]) continue;
-            if (c.route.score < .44f) continue;
-            out.routes.add(c.route);
-            usedTarget[c.ballIndex] = true;
-        }
-
-        // Add at most one clean bank route. This prevents the screen from becoming
-        // a spider-web when ball detection is slightly noisy.
-        for (RouteCandidate c : bankCandidates) {
-            if (out.routes.size() >= 5) break;
-            if (c.route.score < .50f) continue;
-            out.routes.add(c.route);
-            break;
+        // Cue path first, then only object balls that actually travelled.
+        for (SimBall b : sim) {
+            if (b.trace == null || b.trace.points.size() < 2) continue;
+            if (!b.cue && b.travelled < nominalR * 1.2f) continue;
+            out.trajectories.add(b.trace);
+            if (out.trajectories.size() >= 8) break;
         }
     }
 
-    private PointF[] pocketCenters(Table t, float r) {
-        float left = t.roi.left;
-        float right = t.roi.right;
-        float top = t.roi.top;
-        float bottom = t.roi.bottom;
-        float mid = (left + right) * .5f;
+    private static boolean fallsInPocket(SimBall b, RectF r, float nominalR) {
+        float mouth = nominalR * 2.0f;
+        float corner = nominalR * 1.75f;
+        float mid = (r.left + r.right) * .5f;
 
-        // ROI follows the cloth more closely than the pocket centers. A tiny outward
-        // adjustment makes the route terminate visually in the six pockets.
-        float yPad = Math.max(r * 1.8f, t.roi.height() * .035f);
-        return new PointF[]{
-                new PointF(left, top),
-                new PointF(mid, top),
-                new PointF(right, top),
-                new PointF(left, bottom + yPad),
-                new PointF(mid, bottom + yPad),
-                new PointF(right, bottom + yPad)
-        };
-    }
+        boolean top = b.y <= r.top + mouth;
+        boolean bottom = b.y >= r.bottom - mouth;
 
-    private static float routeScore(float cueDistance, float objectDistance, boolean bank, Table t) {
-        float diag = (float)Math.hypot(t.roi.width(), t.roi.height());
-        float distancePenalty = (cueDistance + objectDistance) / Math.max(1f, diag * 1.8f);
-        float base = 1f - Math.min(.75f, distancePenalty * .55f);
-        if (bank) base -= .18f;
-        return clamp01(base);
-    }
-
-    private static boolean insidePlayable(RectF r, PointF p, float margin) {
-        return p.x > r.left + margin && p.x < r.right - margin
-                && p.y > r.top + margin && p.y < r.bottom + margin;
-    }
-
-    private static boolean segmentClear(
-            float x1, float y1, float x2, float y2,
-            List<VisionResult.Ball> balls,
-            VisionResult.Ball ignore,
-            float clearance
-    ) {
-        for (VisionResult.Ball b : balls) {
-            if (b == ignore) continue;
-            float d = pointSegmentDistance(b.x, b.y, x1, y1, x2, y2);
-            float need = Math.max(clearance, b.r + clearance * .55f);
-            if (d < need) return false;
+        if (top || bottom) {
+            if (Math.abs(b.x - r.left) < corner) return true;
+            if (Math.abs(b.x - mid) < mouth) return true;
+            if (Math.abs(b.x - r.right) < corner) return true;
         }
-        return true;
-    }
-
-    private static float pointSegmentDistance(float px, float py, float ax, float ay, float bx, float by) {
-        float vx = bx - ax, vy = by - ay;
-        float wx = px - ax, wy = py - ay;
-        float vv = vx * vx + vy * vy;
-        if (vv < .0001f) return dist(px, py, ax, ay);
-        float t = (wx * vx + wy * vy) / vv;
-        t = Math.max(0f, Math.min(1f, t));
-        float cx = ax + vx * t, cy = ay + vy * t;
-        return dist(px, py, cx, cy);
-    }
-
-    private Bank bankPoint(float sx, float sy, PointF pocket, RectF r, int rail, float radius) {
-        float railPos, mx, my;
-        if (rail == 0) { // left
-            railPos = r.left + radius * .25f;
-            mx = 2f * railPos - pocket.x;
-            my = pocket.y;
-        } else if (rail == 1) { // right
-            railPos = r.right - radius * .25f;
-            mx = 2f * railPos - pocket.x;
-            my = pocket.y;
-        } else if (rail == 2) { // top
-            railPos = r.top + radius * .25f;
-            mx = pocket.x;
-            my = 2f * railPos - pocket.y;
-        } else { // bottom
-            railPos = r.bottom - radius * .25f;
-            mx = pocket.x;
-            my = 2f * railPos - pocket.y;
-        }
-
-        float dx = mx - sx, dy = my - sy;
-        float tHit;
-        float bx, by;
-
-        if (rail <= 1) {
-            if (Math.abs(dx) < .0001f) return null;
-            tHit = (railPos - sx) / dx;
-            if (tHit <= .02f || tHit >= .98f) return null;
-            bx = railPos;
-            by = sy + dy * tHit;
-            float margin = radius * 3.2f;
-            if (by <= r.top + margin || by >= r.bottom - margin) return null;
-        } else {
-            if (Math.abs(dy) < .0001f) return null;
-            tHit = (railPos - sy) / dy;
-            if (tHit <= .02f || tHit >= .98f) return null;
-            bx = sx + dx * tHit;
-            by = railPos;
-            float margin = radius * 3.2f;
-            if (bx <= r.left + margin || bx >= r.right - margin) return null;
-        }
-
-        return new Bank(new PointF(bx, by));
+        return false;
     }
 
     private VisionResult buildGeometry(Table t, Cue cue, List<VisionResult.Ball> balls, Aim aim) {
@@ -739,17 +676,48 @@ public final class VisionEngine {
             this.x = x; this.y = y; this.r = r; this.score = score; this.white = white;
         }
     }
-    private static final class RouteCandidate {
-        final VisionResult.Route route;
-        final int ballIndex;
-        final int pocketIndex;
-        RouteCandidate(VisionResult.Route r, int b, int p) {
-            route = r; ballIndex = b; pocketIndex = p;
+    private static final class SimBall {
+        float x, y, vx, vy, r;
+        final boolean cue;
+        final int colorIndex;
+        boolean pocketed;
+        int bounces;
+        float travelled;
+        float lastX, lastY;
+        VisionResult.Trajectory trace;
+
+        SimBall(float x, float y, float r, boolean cue, int colorIndex) {
+            this.x = x;
+            this.y = y;
+            this.r = r;
+            this.cue = cue;
+            this.colorIndex = colorIndex;
+            this.lastX = x;
+            this.lastY = y;
         }
-    }
-    private static final class Bank {
-        final PointF point;
-        Bank(PointF p) { point = p; }
+
+        float speed() {
+            return (float)Math.hypot(vx, vy);
+        }
+
+        void ensureTrace() {
+            if (trace != null) return;
+            trace = new VisionResult.Trajectory(colorIndex, cue);
+            trace.points.add(new PointF(x, y));
+            lastX = x;
+            lastY = y;
+        }
+
+        void addTrace(boolean force) {
+            if (trace == null) return;
+            float d = dist(x, y, lastX, lastY);
+            if (force || d >= 3.5f) {
+                trace.points.add(new PointF(x, y));
+                travelled += d;
+                lastX = x;
+                lastY = y;
+            }
+        }
     }
     private static final class RowRun {int y,start,end;RowRun(int y,int s,int e){this.y=y;start=s;end=e;}}
     private static final class Table {RectF roi;float hue,sat,val,confidence;Table(RectF r,float h,float s,float v,float c){roi=r;hue=h;sat=s;val=v;confidence=c;}}
