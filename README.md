@@ -1,5 +1,20 @@
 # Trajectory Overlay Lab v0.3
 
+## Baixar e instalar no Android
+
+**APK no GitHub:** abra a execução verde mais recente em **Actions → Build Android APK** e, em **Artifacts**, baixe **TrajectoryOverlay-v0.3-APK**.
+
+Link direto para as builds:
+https://github.com/bvlamas2010s-hub/8ball-overlay/actions/workflows/build-apk.yml
+
+Depois:
+1. Extraia o ZIP baixado.
+2. Abra **TrajectoryOverlay-v0.3.apk**.
+3. Autorize “Instalar apps desconhecidos” se o Android pedir.
+4. Instale por cima da versão atual.
+
+O APK fica armazenado no GitHub por **90 dias** em cada build bem-sucedida.
+
 Protótipo Android para análise visual de geometria de sinuca em tempo real.
 
 ## Instalar
