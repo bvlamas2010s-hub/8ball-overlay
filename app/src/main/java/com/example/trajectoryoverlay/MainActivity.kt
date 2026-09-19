@@ -158,7 +158,7 @@ class MainActivity : AppCompatActivity() {
             openOverlayPermission()
             return
         }
-        ContextCompat.startForegroundService(this, Intent(this, CaptureOverlayService::class.java).apply {
+        startService(Intent(this, CaptureOverlayService::class.java).apply {
             action = CaptureOverlayService.ACTION_TEST
         })
         status.text = "Teste iniciado por 8 segundos. Saia do app e veja se o X/linhas aparecem."
