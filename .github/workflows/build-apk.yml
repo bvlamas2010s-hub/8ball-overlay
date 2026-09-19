@@ -59,10 +59,16 @@ jobs:
           test -s app/build/outputs/apk/debug/app-debug.apk
           ls -lh app/build/outputs/apk/debug/app-debug.apk
 
+      - name: Prepare install file
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/TrajectoryOverlay-v0.3.apk
+
       - name: Upload APK
         uses: actions/upload-artifact@v5
         with:
-          name: trajectory-overlay-v0.3-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: TrajectoryOverlay-v0.3-APK
+          path: dist/TrajectoryOverlay-v0.3.apk
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 90
