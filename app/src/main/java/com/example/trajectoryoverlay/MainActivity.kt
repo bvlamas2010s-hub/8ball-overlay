@@ -60,12 +60,12 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(root)
 
         root.addView(TextView(this).apply {
-            text = "Trajectory Overlay Lab v0.5"
+            text = "Trajectory Overlay Lab v0.6"
             textSize = 25f
             setTextColor(Color.WHITE)
         })
         root.addView(TextView(this).apply {
-            text = "Modo novo: o app detecta a linha de mira do próprio jogo e estende somente a tacada atual, incluindo colisão e rebotes."
+            text = "v0.6: a mira só aparece quando uma mesa real, bolas estáveis e a linha de mira são confirmadas por vários frames. Fora de uma partida, nenhuma trajetória deve aparecer."
             textSize = 14f
             setTextColor(Color.rgb(185, 199, 210))
             setPadding(0, dp(6), 0, dp(14))
