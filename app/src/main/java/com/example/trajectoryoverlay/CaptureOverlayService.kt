@@ -127,7 +127,7 @@ class CaptureOverlayService: Service() {
             AnalysisResult(
                 RectF(0f,0f,width.toFloat(),height.toFloat()),
                 emptyList(),emptyList(),emptyList(),
-                message="Overlay OK • aguardando frame \${width}×\${height}"
+                message="Overlay OK • aguardando frame ${width}×${height}"
             )
         )
 
@@ -170,9 +170,9 @@ class CaptureOverlayService: Service() {
             val buffer=plane.buffer
             val pixelStride=plane.pixelStride
             val rowStride=plane.rowStride
-            if(pixelStride!=4) throw IllegalStateException("pixelStride=\$pixelStride")
+            if(pixelStride!=4) throw IllegalStateException("pixelStride=$pixelStride")
             val expected=rowStride*height
-            if(buffer.remaining()<expected) throw IllegalStateException("buffer=\${buffer.remaining()} esperado=\$expected")
+            if(buffer.remaining()<expected) throw IllegalStateException("buffer=${buffer.remaining()} esperado=$expected")
             val paddedWidth=rowStride/pixelStride
             val bytes=ByteArray(expected)
             buffer.get(bytes)
@@ -196,7 +196,7 @@ class CaptureOverlayService: Service() {
             overlay?.update(result)
             updateNotification(result.message)
         }catch(t:Throwable){
-            val msg="Erro de análise: \${t.javaClass.simpleName}: \${t.message ?: "sem detalhe"}"
+            val msg="Erro de análise: ${t.javaClass.simpleName}: ${t.message ?: "sem detalhe"}"
             val table=RectF(0f,0f,width.toFloat(),height.toFloat())
             overlay?.update(AnalysisResult(table,emptyList(),emptyList(),emptyList(),message=msg))
             updateNotification(msg)
