@@ -86,7 +86,10 @@ class CaptureOverlayService: Service() {
             val frame=padded.submat(0,height,0,width).clone();padded.release()
             val result=analyzer.analyze(frame,Prefs.showDirect(this),Prefs.showBanks(this),Prefs.showSecondary(this));frame.release()
             overlay?.showAll=Prefs.showAll(this);overlay?.update(result)
-        }catch(_:Throwable){}finally{image.close()}
+        }catch(t:Throwable){
+            val table=android.graphics.RectF(0f,0f,width.toFloat(),height.toFloat())
+            overlay?.update(AnalysisResult(table, emptyList(), emptyList(), emptyList(), message="Erro de análise: " + (t.message ?: t.javaClass.simpleName)))
+        }finally{image.close()}
     }
 
     private fun addOverlay(){
