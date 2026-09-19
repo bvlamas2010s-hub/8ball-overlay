@@ -1,32 +1,65 @@
-# 8ball-overlay
+# Trajectory Overlay Lab v0.3
 
-Android trajectory overlay prototype with automatic cloud APK builds.
+Protótipo Android para análise visual de geometria de sinuca em tempo real.
 
-## Baixar o APK pelo celular
+## Instalar
 
-1. Abra a aba **Actions** deste repositório.
-2. Abra a execução mais recente chamada **Build Android APK**.
-3. Aguarde o job ficar verde.
-4. Na página da execução, role até **Artifacts**.
-5. Baixe **trajectory-overlay-debug-apk**.
-6. Extraia o ZIP baixado.
-7. Instale **app-debug.apk** no Android.
+1. Abra **Actions** neste repositório.
+2. Abra a execução verde mais recente de **Build Android APK**.
+3. Em **Artifacts**, baixe **trajectory-overlay-v0.3-debug-apk**.
+4. Extraia o ZIP e instale `app-debug.apk`.
 
-## Se o Android bloquear a instalação
+A versão v0.3 usa uma chave de assinatura de desenvolvimento estável, então futuras builds podem ser instaladas por cima desta versão sem precisar desinstalar o app.
 
-Permita temporariamente **Instalar apps desconhecidos** para o navegador ou gerenciador de arquivos usado para abrir o APK.
+## Teste recomendado
 
-Depois de instalar, o app também pede:
-- permissão para aparecer sobre outros apps;
-- autorização do Android para captura/compartilhamento da tela;
-- notificação do serviço em primeiro plano.
+Antes de abrir qualquer jogo/app:
 
-## Build
+1. Abra o Trajectory Overlay Lab.
+2. Confirme que aparece **Overlay: OK • OpenCV: OK**.
+3. Toque em **Testar overlay**.
+4. Deve aparecer por 8 segundos:
+   - um X azul no canto superior direito;
+   - texto de diagnóstico no topo;
+   - linhas de exemplo;
+   - dois círculos de bola.
 
-O GitHub Actions usa Java 17, Gradle 8.9 e Android SDK 35 para executar:
+Se esse teste não aparecer, o problema está na permissão/renderização do overlay, não no detector.
 
-`gradle :app:assembleDebug`
+## Análise da tela
 
-O APK gerado fica em:
+1. Toque em **Iniciar análise**.
+2. Autorize a captura/compartilhamento de tela.
+3. Abra a tela que deseja analisar.
+4. O topo do overlay informa:
+   - se a mesa foi detectada automaticamente ou por fallback;
+   - quantas bolas foram detectadas;
+   - quantas rotas válidas foram calculadas.
 
-`app/build/outputs/apk/debug/app-debug.apk`
+O overlay também desenha:
+- retângulo da mesa detectada;
+- posições das caçapas;
+- círculos das bolas detectadas;
+- ponto fantasma de contato;
+- trajetórias diretas;
+- bank shots de uma tabela;
+- trajetória residual estimada da branca.
+
+## Diagnóstico rápido
+
+- **X azul não aparece em lugar nenhum:** revisar permissão "Aparecer sobre outros apps".
+- **X aparece em outros apps, mas some em um app específico:** o app alvo pode estar ocultando overlays do Android.
+- **Mesa aparece, mas 0 ou 1 bola:** ajustar sensibilidade.
+- **Bolas aparecem, mas 0 rotas:** detector está funcionando; nenhuma rota passou pelos filtros geométricos naquele frame.
+- **Mensagem "Erro de análise":** envie o texto exato mostrado no topo/notificação.
+
+## Qualidade automática
+
+Toda build publicada executa:
+- compilação do APK;
+- testes unitários do motor geométrico;
+- Android Lint;
+- verificação do arquivo APK;
+- assinatura estável de desenvolvimento.
+
+O modelo de física é aproximado e não reproduz spin, atrito e dinâmica específica de um jogo com precisão perfeita.
