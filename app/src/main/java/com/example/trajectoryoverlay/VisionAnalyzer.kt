@@ -47,14 +47,14 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
         if(balls.size<2 || balls.none{it.cue}) {
             return AnalysisResult(
                 table,balls,pockets,emptyList(),
-                message="\$tableSource • \${balls.size} bolas • sens \${sensitivityProvider()}"
+                message="$tableSource • ${balls.size} bolas • sens ${sensitivityProvider()}"
             )
         }
 
         val trajectories=TrajectoryEngine.calculate(table,balls,pockets,direct,banks,secondary)
         return AnalysisResult(
             table,balls,pockets,trajectories,
-            message="\$tableSource • \${balls.size} bolas • \${trajectories.size} rotas"
+            message="$tableSource • ${balls.size} bolas • ${trajectories.size} rotas"
         )
     }
 
