@@ -63,7 +63,6 @@ class CaptureOverlayService: Service() {
                 if(!Settings.canDrawOverlays(this)){ stopSelf(); return START_NOT_STICKY }
                 stopEverythingResourcesOnly()
                 running=true
-                startAsForeground("Teste do overlay ativo")
                 addOverlay(secure=false)
                 showSyntheticTest()
                 mainHandler.postDelayed({ stopEverything() },8000)
