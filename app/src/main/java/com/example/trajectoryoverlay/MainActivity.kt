@@ -21,6 +21,7 @@ import org.opencv.android.OpenCVLoader
 class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var projectionManager: MediaProjectionManager
+    private var openCvReady = false
 
     private val captureLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
@@ -30,7 +31,7 @@ class MainActivity : AppCompatActivity() {
                 putExtra(CaptureOverlayService.EXTRA_RESULT_DATA, result.data)
             }
             ContextCompat.startForegroundService(this, i)
-            status.text = "Análise iniciada. Agora abra o app/jogo capturado. Para parar, use a notificação."
+            status.text = "Captura autorizada. Abra a mesa e veja o diagnóstico no topo do overlay."
         } else {
             status.text = "Captura de tela não autorizada."
         }
@@ -39,11 +40,14 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         projectionManager = getSystemService(MediaProjectionManager::class.java)
-        if (!OpenCVLoader.initLocal()) {
-            Toast.makeText(this, "Falha ao carregar OpenCV", Toast.LENGTH_LONG).show()
-        }
+        openCvReady = OpenCVLoader.initLocal()
         requestNotificationPermission()
         setContentView(buildUi())
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::status.isInitialized) updateLocalStatus()
     }
 
     private fun buildUi(): ScrollView {
@@ -56,30 +60,34 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(root)
 
         root.addView(TextView(this).apply {
-            text = "Trajectory Overlay Lab"
+            text = "Trajectory Overlay Lab v0.3"
             textSize = 25f
             setTextColor(Color.WHITE)
         })
         root.addView(TextView(this).apply {
-            text = "Captura a tela autorizada, detecta mesa/bolas e desenha trajetórias em um overlay transparente. Protótipo experimental para análise/treino."
+            text = "Primeiro teste o overlay sozinho. Depois inicie a captura. O texto no topo mostra se o problema está no overlay, na captura ou na detecção."
             textSize = 14f
             setTextColor(Color.rgb(185, 199, 210))
             setPadding(0, dp(6), 0, dp(14))
         })
 
-        val buttonRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        buttonRow.addView(button("1. Permitir overlay") { openOverlayPermission() })
-        buttonRow.addView(button("2. Iniciar análise") { startCapture() })
-        buttonRow.addView(button("Parar") { stopCapture() })
-        root.addView(buttonRow)
+        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row1.addView(button("1. Permitir overlay") { openOverlayPermission() })
+        row1.addView(button("2. Testar overlay") { testOverlay() })
+        root.addView(row1)
+
+        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        row2.addView(button("3. Iniciar análise") { startCapture() })
+        row2.addView(button("Parar") { stopCapture() })
+        root.addView(row2)
 
         status = TextView(this).apply {
-            text = if (Settings.canDrawOverlays(this@MainActivity)) "Overlay permitido." else "Primeiro conceda a permissão de overlay."
             textSize = 13f
             setTextColor(Color.rgb(124, 203, 255))
             setPadding(0, dp(12), 0, dp(12))
         }
         root.addView(status)
+        updateLocalStatus()
 
         root.addView(check("Trajetórias diretas", Prefs.showDirect(this)) { Prefs.setDirect(this, it) })
         root.addView(check("Bank shots (1 tabela)", Prefs.showBanks(this)) { Prefs.setBanks(this, it) })
@@ -93,16 +101,16 @@ class MainActivity : AppCompatActivity() {
         })
         val sensText = TextView(this).apply {
             setTextColor(Color.LTGRAY)
-            text = "${Prefs.sensitivity(this@MainActivity)} (menor = detecta mais círculos)"
+            text = "\${Prefs.sensitivity(this@MainActivity)} (menor = detecta mais)"
         }
         val seek = SeekBar(this).apply {
             max = 20
-            progress = Prefs.sensitivity(this@MainActivity) - 10
+            progress = (Prefs.sensitivity(this@MainActivity) - 10).coerceIn(0, 20)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar?, progress: Int, fromUser: Boolean) {
                     val value = 10 + progress
                     Prefs.setSensitivity(this@MainActivity, value)
-                    sensText.text = "$value (menor = detecta mais círculos)"
+                    sensText.text = "$value (menor = detecta mais)"
                 }
                 override fun onStartTrackingTouch(s: SeekBar?) {}
                 override fun onStopTrackingTouch(s: SeekBar?) {}
@@ -112,12 +120,17 @@ class MainActivity : AppCompatActivity() {
         root.addView(sensText)
 
         root.addView(TextView(this).apply {
-            text = "Como usar\n1) Deixe o celular em modo paisagem.\n2) Toque em ‘Permitir overlay’.\n3) Volte e toque em ‘Iniciar análise’.\n4) No diálogo de compartilhamento, selecione o app que você quer analisar (quando essa opção estiver disponível).\n5) Abra a mesa. As linhas aparecem automaticamente.\n\nSe a detecção pegar círculos falsos, aumente a sensibilidade para 20–25. Se não detectar bolas suficientes, diminua para 13–17."
+            text = "Diagnóstico esperado\n• Teste: aparece um X azul, texto e linhas de exemplo por 8 s.\n• Captura: topo mostra tamanho do frame e quantidade de bolas/rotas.\n• Se o teste aparece em outros apps mas some somente sobre um app específico, esse app pode estar bloqueando overlays.\n• Se aparece ‘0/1 bolas’, o problema é a detecção e não a permissão."
             textSize = 13f
             setTextColor(Color.rgb(190, 200, 208))
             setPadding(0, dp(18), 0, dp(8))
         })
         return scroll
+    }
+
+    private fun updateLocalStatus() {
+        val overlayOk = Settings.canDrawOverlays(this)
+        status.text = "Overlay: \${if (overlayOk) "OK" else "SEM PERMISSÃO"} • OpenCV: \${if (openCvReady) "OK" else "FALHOU"}"
     }
 
     private fun button(text: String, onClick: () -> Unit) = Button(this).apply {
@@ -139,10 +152,26 @@ class MainActivity : AppCompatActivity() {
         startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
     }
 
+    private fun testOverlay() {
+        if (!Settings.canDrawOverlays(this)) {
+            status.text = "Conceda a permissão de overlay primeiro."
+            openOverlayPermission()
+            return
+        }
+        ContextCompat.startForegroundService(this, Intent(this, CaptureOverlayService::class.java).apply {
+            action = CaptureOverlayService.ACTION_TEST
+        })
+        status.text = "Teste iniciado por 8 segundos. Saia do app e veja se o X/linhas aparecem."
+    }
+
     private fun startCapture() {
         if (!Settings.canDrawOverlays(this)) {
             status.text = "Conceda a permissão de overlay primeiro."
             openOverlayPermission()
+            return
+        }
+        if (!openCvReady) {
+            status.text = "OpenCV não carregou; reinstale a versão mais recente do APK."
             return
         }
         captureLauncher.launch(projectionManager.createScreenCaptureIntent())
