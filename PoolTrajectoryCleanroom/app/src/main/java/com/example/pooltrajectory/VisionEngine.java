@@ -281,68 +281,95 @@ public final class VisionEngine {
     }
 
     private List<VisionResult.Ball> findObjectBalls(PixelFrame f, Table t, Cue cue) {
-        int left = Math.max(0, (int)t.roi.left), right = Math.min(f.w-1, (int)t.roi.right);
-        int top = Math.max(0, (int)t.roi.top), bottom = Math.min(f.h-1, (int)t.roi.bottom);
-        int rw = Math.max(1, right-left);
-        int minD = Math.max(6, Math.round(rw * .018f));
-        int maxD = Math.max(minD+2, Math.round(rw * .075f));
-        int ww = right-left+1, hh = bottom-top+1;
-        boolean[] mask = new boolean[ww*hh];
+        int left = Math.max(0, (int)t.roi.left);
+        int right = Math.min(f.w - 1, (int)t.roi.right);
+        int top = Math.max(0, (int)t.roi.top);
+        int bottom = Math.min(f.h - 1, (int)t.roi.bottom);
+        int rw = Math.max(1, right - left);
 
-        for (int yy=0; yy<hh; yy++) {
-            int y=top+yy;
-            for (int xx=0; xx<ww; xx++) {
-                int x=left+xx;
-                if (dist(x,y,cue.x,cue.y) < cue.r*1.7f) continue;
-                HSV c=f.hsv(x,y);
-                float hd=hueDiff(c.h,t.hue);
-                boolean different = hd > 22f || Math.abs(c.s-t.sat)>.25f || Math.abs(c.v-t.val)>.22f;
-                boolean strong = c.v < .16f || c.v > .72f || c.s > Math.min(1f,t.sat+.22f);
-                mask[yy*ww+xx] = different && strong;
-            }
-        }
+        // In the supplied 8 Ball Pool captures, ball radius is ~1.45% of cloth width.
+        int baseR = Math.max(4, Math.round(rw * .0145f));
+        List<BallCandidate> candidates = new ArrayList<>();
 
-        boolean[] seen = new boolean[mask.length];
-        int[] q = new int[mask.length];
-        List<VisionResult.Ball> out = new ArrayList<>();
-        int[] dirs={1,0,-1,0,0,1,0,-1};
-        for(int sy=1;sy<hh-1;sy++) for(int sx=1;sx<ww-1;sx++) {
-            int seed=sy*ww+sx;
-            if(!mask[seed]||seen[seed]) continue;
-            int qh=0,qt=0; q[qt++]=seed; seen[seed]=true;
-            int count=0,minx=sx,maxx=sx,miny=sy,maxy=sy;
-            float sumx=0,sumy=0,sumV=0,sumS=0;
-            while(qh<qt) {
-                int idx=q[qh++], cy=idx/ww, cx=idx-cy*ww;
-                count++; sumx+=cx; sumy+=cy;
-                HSV cc=f.hsv(left+cx,top+cy); sumV+=cc.v; sumS+=cc.s;
-                if(cx<minx)minx=cx;if(cx>maxx)maxx=cx;if(cy<miny)miny=cy;if(cy>maxy)maxy=cy;
-                for(int d=0;d<4;d++){
-                    int nx=cx+dirs[d*2],ny=cy+dirs[d*2+1];
-                    if(nx<0||ny<0||nx>=ww||ny>=hh)continue;
-                    int ni=ny*ww+nx;
-                    if(mask[ni]&&!seen[ni]){seen[ni]=true;q[qt++]=ni;}
+        for (int y = top + baseR; y <= bottom - baseR; y += 2) {
+            for (int x = left + baseR; x <= right - baseR; x += 2) {
+                if (dist(x, y, cue.x, cue.y) < Math.max(cue.r, baseR) * 2.25f) continue;
+
+                int inside = 0, nonFelt = 0, vivid = 0;
+                float avgV = 0f, avgS = 0f;
+
+                // Sample the disk rather than connected components. Stripes, numbers
+                // and highlights often split one real ball into multiple components.
+                float[] radii = {0f, baseR * .38f, baseR * .72f, baseR * .95f};
+                for (float rr : radii) {
+                    int count = rr == 0f ? 1 : 16;
+                    for (int i = 0; i < count; i++) {
+                        double a = count == 1 ? 0 : i * Math.PI * 2.0 / count;
+                        int xx = Math.round(x + (float)Math.cos(a) * rr);
+                        int yy = Math.round(y + (float)Math.sin(a) * rr);
+                        HSV c = f.hsv(xx, yy);
+                        inside++;
+                        avgV += c.v; avgS += c.s;
+                        if (!isFelt(c, t.hue)) nonFelt++;
+                        if (c.v > .72f || c.v < .22f || c.s > .48f) vivid++;
+                    }
                 }
-                if(count>maxD*maxD*2) break;
+
+                float nonFeltFrac = nonFelt / (float)Math.max(1, inside);
+                float vividFrac = vivid / (float)Math.max(1, inside);
+                avgV /= Math.max(1, inside);
+                avgS /= Math.max(1, inside);
+
+                if (nonFeltFrac < .54f || vividFrac < .26f) continue;
+
+                int ring = 0, ringFelt = 0;
+                float ringR = baseR * 1.48f;
+                for (int i = 0; i < 32; i++) {
+                    double a = i * Math.PI * 2.0 / 32.0;
+                    int xx = Math.round(x + (float)Math.cos(a) * ringR);
+                    int yy = Math.round(y + (float)Math.sin(a) * ringR);
+                    if (!t.roi.contains(xx, yy)) continue;
+                    ring++;
+                    if (isFelt(f.hsv(xx, yy), t.hue)) ringFelt++;
+                }
+                if (ring < 20) continue;
+                float feltRing = ringFelt / (float)ring;
+                if (feltRing < .56f) continue;
+
+                // Reject rail/pocket artifacts. Real balls may touch a rail, but their
+                // center is still normally at least about one radius inside the cloth.
+                float edge = Math.min(
+                        Math.min(x - t.roi.left, t.roi.right - x),
+                        Math.min(y - t.roi.top, t.roi.bottom - y)
+                );
+                if (edge < baseR * .70f) continue;
+
+                float score = nonFeltFrac * .48f + feltRing * .40f + vividFrac * .18f;
+                if (score < .62f) continue;
+
+                boolean mostlyWhite = avgV > .68f && avgS < .34f;
+                candidates.add(new BallCandidate(x, y, baseR, clamp01(score), mostlyWhite));
             }
-            int bw=maxx-minx+1,bh=maxy-miny+1;
-            if(bw<minD||bh<minD||bw>maxD||bh>maxD) continue;
-            float aspect=bw/(float)Math.max(1,bh);
-            if(aspect<.62f||aspect>1.62f)continue;
-            float extent=count/(float)(bw*bh);
-            if(extent<.28f)continue;
-            float cx=left+sumx/count,cy=top+sumy/count;
-            float r=(bw+bh)*.25f;
-            float edge=Math.min(Math.min(cx-t.roi.left,t.roi.right-cx),Math.min(cy-t.roi.top,t.roi.bottom-cy));
-            float avgV=sumV/count,avgS=sumS/count;
-            // Dark blobs right on the rail are usually pockets, not balls.
-            if(edge<r*.65f && avgV<.25f)continue;
-            boolean white=avgV>.70f&&avgS<.32f;
-            float score=clamp01(extent*.7f + (1f-Math.abs(1f-aspect))*.3f);
-            out.add(new VisionResult.Ball(cx,cy,r,score,white));
         }
-        out.sort(Comparator.comparingDouble(b -> dist(b.x,b.y,cue.x,cue.y)));
-        if(out.size()>20) return new ArrayList<>(out.subList(0,20));
+
+        candidates.sort((a, b) -> Float.compare(b.score, a.score));
+
+        List<VisionResult.Ball> out = new ArrayList<>();
+        for (BallCandidate c : candidates) {
+            boolean duplicate = false;
+            for (VisionResult.Ball b : out) {
+                if (dist(c.x, c.y, b.x, b.y) < baseR * 1.45f) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+
+            out.add(new VisionResult.Ball(c.x, c.y, c.r, c.score, c.white));
+            if (out.size() >= 15) break; // 8-ball has at most 15 object balls.
+        }
+
+        out.sort(Comparator.comparingDouble(b -> dist(b.x, b.y, cue.x, cue.y)));
         return out;
     }
 
@@ -394,43 +421,65 @@ public final class VisionEngine {
     private void buildRouteMap(VisionResult out, Table t, Cue cue, List<VisionResult.Ball> balls) {
         if (out == null || t == null || cue == null || balls == null || balls.isEmpty()) return;
 
-        List<RouteCandidate> candidates = new ArrayList<>();
+        List<RouteCandidate> directCandidates = new ArrayList<>();
+        List<RouteCandidate> bankCandidates = new ArrayList<>();
         PointF[] pockets = pocketCenters(t, cue.r);
         float nominalR = Math.max(4f, cue.r);
         int color = 0;
 
         for (int bi = 0; bi < balls.size(); bi++) {
             VisionResult.Ball target = balls.get(bi);
-            if (target == null) continue;
+            if (target == null || target.score < .62f) continue;
 
             for (int pi = 0; pi < pockets.length; pi++) {
                 PointF pocket = pockets[pi];
 
-                float vx = pocket.x - target.x;
-                float vy = pocket.y - target.y;
-                float len = (float)Math.hypot(vx, vy);
-                if (len < nominalR * 3f) continue;
-                float ux = vx / len, uy = vy / len;
+                float ovx = pocket.x - target.x;
+                float ovy = pocket.y - target.y;
+                float objectLen = (float)Math.hypot(ovx, ovy);
+                if (objectLen < nominalR * 3.5f) continue;
 
-                float contactDistance = Math.max(nominalR + target.r, nominalR * 1.85f);
-                PointF ghost = new PointF(target.x - ux * contactDistance,
-                        target.y - uy * contactDistance);
+                float oux = ovx / objectLen;
+                float ouy = ovy / objectLen;
+                float contactDistance = Math.max(nominalR + target.r, nominalR * 1.90f);
 
-                if (!insidePlayable(t.roi, ghost, nominalR * .8f)) continue;
+                PointF ghost = new PointF(
+                        target.x - oux * contactDistance,
+                        target.y - ouy * contactDistance
+                );
+
+                if (!insidePlayable(t.roi, ghost, nominalR * .75f)) continue;
+
+                float ivx = ghost.x - cue.x;
+                float ivy = ghost.y - cue.y;
+                float incomingLen = (float)Math.hypot(ivx, ivy);
+                if (incomingLen < nominalR * 3f) continue;
+                float iux = ivx / incomingLen;
+                float iuy = ivy / incomingLen;
+
+                // If this is too thin, a tiny detector error makes the path wildly wrong.
+                float cutCos = iux * oux + iuy * ouy;
+                if (cutCos < .50f) continue; // ~60 degree maximum cut.
+
                 if (!segmentClear(cue.x, cue.y, ghost.x, ghost.y, balls, target,
-                        nominalR * 1.65f)) continue;
+                        nominalR * 1.72f)) continue;
                 if (!segmentClear(target.x, target.y, pocket.x, pocket.y, balls, target,
-                        nominalR * 1.45f)) continue;
+                        nominalR * 1.55f)) continue;
 
-                float cueLen = dist(cue.x, cue.y, ghost.x, ghost.y);
-                float score = routeScore(cueLen, len, false, t);
+                float score = routeScore(incomingLen, objectLen, false, t)
+                        * (.58f + .42f * cutCos)
+                        * (.72f + .28f * target.score);
+
                 VisionResult.Route direct = new VisionResult.Route((color++) % 6, false, score);
                 direct.points.add(new PointF(cue.x, cue.y));
                 direct.points.add(ghost);
                 direct.points.add(new PointF(target.x, target.y));
                 direct.points.add(pocket);
-                candidates.add(new RouteCandidate(direct, bi, pi));
+                directCandidates.add(new RouteCandidate(direct, bi, pi));
 
+                // One-cushion routes are much less tolerant of detection noise.
+                // Only keep very clean candidates and use them only as secondary options.
+                if (cutCos < .62f) continue;
                 for (int rail = 0; rail < 4; rail++) {
                     Bank bank = bankPoint(target.x, target.y, pocket, t.roi, rail, nominalR);
                     if (bank == null) continue;
@@ -438,50 +487,69 @@ public final class VisionEngine {
                     float bx = bank.point.x, by = bank.point.y;
                     float firstLen = dist(target.x, target.y, bx, by);
                     float secondLen = dist(bx, by, pocket.x, pocket.y);
-                    if (firstLen < nominalR * 4f || secondLen < nominalR * 4f) continue;
+                    if (firstLen < nominalR * 5f || secondLen < nominalR * 5f) continue;
 
-                    float dux = (bx - target.x) / Math.max(.001f, firstLen);
-                    float duy = (by - target.y) / Math.max(.001f, firstLen);
+                    float bux = (bx - target.x) / Math.max(.001f, firstLen);
+                    float buy = (by - target.y) / Math.max(.001f, firstLen);
                     PointF bankGhost = new PointF(
-                            target.x - dux * contactDistance,
-                            target.y - duy * contactDistance
+                            target.x - bux * contactDistance,
+                            target.y - buy * contactDistance
                     );
-                    if (!insidePlayable(t.roi, bankGhost, nominalR * .8f)) continue;
-                    if (!segmentClear(cue.x, cue.y, bankGhost.x, bankGhost.y, balls, target,
-                            nominalR * 1.65f)) continue;
-                    if (!segmentClear(target.x, target.y, bx, by, balls, target,
-                            nominalR * 1.45f)) continue;
-                    if (!segmentClear(bx, by, pocket.x, pocket.y, balls, target,
-                            nominalR * 1.45f)) continue;
+                    if (!insidePlayable(t.roi, bankGhost, nominalR * .75f)) continue;
 
-                    float bankScore = routeScore(
-                            dist(cue.x, cue.y, bankGhost.x, bankGhost.y),
-                            firstLen + secondLen,
-                            true,
-                            t
-                    );
-                    VisionResult.Route route = new VisionResult.Route((color++) % 6, true, bankScore);
-                    route.points.add(new PointF(cue.x, cue.y));
-                    route.points.add(bankGhost);
-                    route.points.add(new PointF(target.x, target.y));
-                    route.points.add(bank.point);
-                    route.points.add(pocket);
-                    candidates.add(new RouteCandidate(route, bi, pi));
+                    float bivx = bankGhost.x - cue.x;
+                    float bivy = bankGhost.y - cue.y;
+                    float biLen = (float)Math.hypot(bivx, bivy);
+                    if (biLen < nominalR * 3f) continue;
+                    float bankCutCos = (bivx / biLen) * bux + (bivy / biLen) * buy;
+                    if (bankCutCos < .62f) continue;
+
+                    if (!segmentClear(cue.x, cue.y, bankGhost.x, bankGhost.y, balls, target,
+                            nominalR * 1.72f)) continue;
+                    if (!segmentClear(target.x, target.y, bx, by, balls, target,
+                            nominalR * 1.55f)) continue;
+                    if (!segmentClear(bx, by, pocket.x, pocket.y, balls, target,
+                            nominalR * 1.55f)) continue;
+
+                    float bankScore = routeScore(biLen, firstLen + secondLen, true, t)
+                            * (.55f + .45f * bankCutCos)
+                            * (.72f + .28f * target.score);
+
+                    if (bankScore < .42f) continue;
+
+                    VisionResult.Route bankRoute =
+                            new VisionResult.Route((color++) % 6, true, bankScore);
+                    bankRoute.points.add(new PointF(cue.x, cue.y));
+                    bankRoute.points.add(bankGhost);
+                    bankRoute.points.add(new PointF(target.x, target.y));
+                    bankRoute.points.add(bank.point);
+                    bankRoute.points.add(pocket);
+                    bankCandidates.add(new RouteCandidate(bankRoute, bi, pi));
                 }
             }
         }
 
-        candidates.sort((a, b) -> Float.compare(b.route.score, a.route.score));
+        directCandidates.sort((a, b) -> Float.compare(b.route.score, a.route.score));
+        bankCandidates.sort((a, b) -> Float.compare(b.route.score, a.route.score));
 
         boolean[] usedTarget = new boolean[Math.max(1, balls.size())];
-        for (RouteCandidate c : candidates) {
-            if (out.routes.size() >= 8) break;
 
-            // Prefer diversity: first pass gives different balls a route.
-            if (!usedTarget[c.ballIndex] || out.routes.size() >= 5) {
-                out.routes.add(c.route);
-                usedTarget[c.ballIndex] = true;
-            }
+        // Correctness first: at most 4 direct routes, one per target ball.
+        for (RouteCandidate c : directCandidates) {
+            if (out.routes.size() >= 4) break;
+            if (usedTarget[c.ballIndex]) continue;
+            if (c.route.score < .44f) continue;
+            out.routes.add(c.route);
+            usedTarget[c.ballIndex] = true;
+        }
+
+        // Add at most one clean bank route. This prevents the screen from becoming
+        // a spider-web when ball detection is slightly noisy.
+        for (RouteCandidate c : bankCandidates) {
+            if (out.routes.size() >= 5) break;
+            if (c.route.score < .50f) continue;
+            out.routes.add(c.route);
+            break;
         }
     }
 
@@ -664,6 +732,13 @@ public final class VisionEngine {
     private static float clamp01(float v){return Math.max(0f,Math.min(1f,v));}
     private static String fmt(float v){return String.format(java.util.Locale.US,"%.2f",v);}
 
+    private static final class BallCandidate {
+        final float x, y, r, score;
+        final boolean white;
+        BallCandidate(float x, float y, float r, float score, boolean white) {
+            this.x = x; this.y = y; this.r = r; this.score = score; this.white = white;
+        }
+    }
     private static final class RouteCandidate {
         final VisionResult.Route route;
         final int ballIndex;
