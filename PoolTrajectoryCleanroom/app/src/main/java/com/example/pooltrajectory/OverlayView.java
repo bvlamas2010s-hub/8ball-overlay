@@ -14,6 +14,7 @@ public final class OverlayView extends View {
     private final Paint debug = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint panel = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint roiPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint routePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private volatile VisionResult result;
 
     public OverlayView(Context c) {
@@ -25,6 +26,7 @@ public final class OverlayView extends View {
         debug.setColor(Color.WHITE); debug.setTextSize(dp(11)); debug.setStyle(Paint.Style.FILL);
         panel.setColor(Color.argb(185, 0, 0, 0)); panel.setStyle(Paint.Style.FILL);
         roiPaint.setColor(Color.argb(150, 0, 255, 255)); roiPaint.setStrokeWidth(dp(1)); roiPaint.setStyle(Paint.Style.STROKE);
+        routePaint.setStrokeWidth(dp(1.8f)); routePaint.setStyle(Paint.Style.STROKE);
     }
 
     public void setResult(VisionResult r) {
@@ -64,6 +66,30 @@ public final class OverlayView extends View {
             c.drawCircle(r.cueBall.x, r.cueBall.y, Math.max(dp(5), r.cueRadius), cue);
         }
 
+        // Candidate route map: direct pots and one-cushion routes.
+        for (int ri = 0; ri < r.routes.size(); ri++) {
+            VisionResult.Route route = r.routes.get(ri);
+            routePaint.setColor(routeColor(route.colorIndex));
+            routePaint.setAlpha(route.bank ? 195 : 235);
+
+            for (int i = 1; i < route.points.size(); i++) {
+                android.graphics.PointF a = route.points.get(i - 1);
+                android.graphics.PointF b = route.points.get(i);
+                c.drawLine(a.x, a.y, b.x, b.y, routePaint);
+            }
+
+            if (!route.points.isEmpty()) {
+                android.graphics.PointF end = route.points.get(route.points.size() - 1);
+                c.drawCircle(end.x, end.y, dp(7), routePaint);
+
+                // Mark cushion/contact points, matching the route-map style.
+                if (route.bank && route.points.size() >= 5) {
+                    android.graphics.PointF bounce = route.points.get(route.points.size() - 2);
+                    c.drawCircle(bounce.x, bounce.y, dp(5), routePaint);
+                }
+            }
+        }
+
         if (r.isDrawable()) {
             if (r.cueBall != null && r.primaryEnd != null) {
                 c.drawLine(r.cueBall.x, r.cueBall.y, r.primaryEnd.x, r.primaryEnd.y, main);
@@ -80,6 +106,17 @@ public final class OverlayView extends View {
         }
 
         c.restore();
+    }
+
+    private int routeColor(int index) {
+        switch (Math.floorMod(index, 6)) {
+            case 0: return Color.rgb(235, 55, 55);
+            case 1: return Color.rgb(80, 205, 95);
+            case 2: return Color.rgb(55, 105, 235);
+            case 3: return Color.rgb(245, 215, 45);
+            case 4: return Color.rgb(220, 70, 205);
+            default: return Color.rgb(245, 135, 45);
+        }
     }
 
     private float dp(float v) {
