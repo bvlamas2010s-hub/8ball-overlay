@@ -19,6 +19,123 @@ object TrajectoryEngine {
         }
     }
 
+
+    fun calculateFromAim(
+        table: RectF,
+        balls: List<Ball>,
+        aimDirection: PointF,
+        banks: Boolean,
+        secondary: Boolean
+    ): List<Trajectory> {
+        val cue=balls.firstOrNull{it.cue} ?: return emptyList()
+        val dir=Geometry.norm(aimDirection)
+        if(Geometry.len(dir)<0.5f) return emptyList()
+
+        val inset=max(4f,cue.radius*1.05f)
+        val playable=RectF(
+            table.left+inset,
+            table.top+inset,
+            table.right-inset,
+            table.bottom-inset
+        )
+
+        var hitBall:Ball?=null
+        var hitT=Float.POSITIVE_INFINITY
+        for(obj in balls.filterNot{it.cue}){
+            val t=rayCircleFirstHit(cue.center,dir,obj.center,cue.radius+obj.radius) ?: continue
+            if(t>cue.radius*.3f && t<hitT){
+                hitT=t
+                hitBall=obj
+            }
+        }
+
+        if(hitBall==null){
+            val cuePath=traceBounces(cue.center,dir,playable,if(banks)2 else 0)
+            if(cuePath.size<2) return emptyList()
+            return listOf(
+                Trajectory(
+                    PathKind.CUE_BANK,
+                    cuePath,
+                    emptyList(),
+                    cuePath.last(),
+                    0f,
+                    0f,
+                    emptyList()
+                )
+            )
+        }
+
+        val obj=hitBall!!
+        val cueImpact=Geometry.add(cue.center,Geometry.mul(dir,hitT))
+        val normal=Geometry.norm(Geometry.sub(obj.center,cueImpact))
+        val objectDir=normal
+
+        val objectPath=traceBounces(
+            obj.center,
+            objectDir,
+            playable,
+            if(banks)2 else 0
+        )
+
+        val cueAfterPath=if(secondary){
+            val transferred=Geometry.mul(normal,Geometry.dot(dir,normal))
+            val residual=Geometry.sub(dir,transferred)
+            if(Geometry.len(residual)>0.06f){
+                traceBounces(cueImpact,Geometry.norm(residual),playable,if(banks)1 else 0)
+            }else emptyList()
+        }else emptyList()
+
+        val kind=if(objectPath.size>2) PathKind.OBJECT_BANK else PathKind.DIRECT
+        return listOf(
+            Trajectory(
+                kind,
+                listOf(cue.center,cueImpact),
+                objectPath,
+                cueImpact,
+                angle(dir,objectDir),
+                0f,
+                cueAfterPath
+            )
+        )
+    }
+
+    private fun rayCircleFirstHit(origin:PointF,dir:PointF,center:PointF,radius:Float):Float?{
+        val oc=Geometry.sub(origin,center)
+        val b=2f*Geometry.dot(oc,dir)
+        val c=Geometry.dot(oc,oc)-radius*radius
+        val disc=b*b-4f*c
+        if(disc<0f)return null
+        val root=sqrt(disc)
+        val t1=(-b-root)/2f
+        val t2=(-b+root)/2f
+        return listOf(t1,t2).filter{it>0f}.minOrNull()
+    }
+
+    private fun traceBounces(start:PointF,direction:PointF,rect:RectF,maxBounces:Int):List<PointF>{
+        val pts=mutableListOf(start)
+        var p=start
+        var d=Geometry.norm(direction)
+
+        repeat(maxBounces+1){
+            val edge=Geometry.lineToRectEdge(p,d,rect) ?: return pts
+            pts.add(edge)
+            if(it==maxBounces)return pts
+
+            val eps=1.6f
+            val onLeft=abs(edge.x-rect.left)<3f
+            val onRight=abs(edge.x-rect.right)<3f
+            val onTop=abs(edge.y-rect.top)<3f
+            val onBottom=abs(edge.y-rect.bottom)<3f
+
+            d=PointF(
+                if(onLeft||onRight)-d.x else d.x,
+                if(onTop||onBottom)-d.y else d.y
+            )
+            p=Geometry.add(edge,Geometry.mul(d,eps))
+        }
+        return pts
+    }
+
     fun calculate(table: RectF, balls: List<Ball>, pockets: List<PointF>, direct: Boolean, banks: Boolean, secondary: Boolean): List<Trajectory> {
         val cue = balls.firstOrNull { it.cue } ?: return emptyList()
         val objects = balls.filterNot { it.cue }
