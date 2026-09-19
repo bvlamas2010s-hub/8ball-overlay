@@ -7,6 +7,18 @@ import kotlin.math.*
 object TrajectoryEngine {
     private enum class Rail { TOP, BOTTOM, LEFT, RIGHT }
 
+    fun selfTest(): String? {
+        return try {
+            val table=RectF(50f,50f,1050f,550f)
+            val cue=Ball(PointF(250f,300f),18f,true)
+            val obj=Ball(PointF(650f,300f),18f,false)
+            val result=calculate(table,listOf(cue,obj),pockets(table),direct=true,banks=true,secondary=true)
+            if(result.isEmpty()) "motor sem trajetórias no teste sintético" else null
+        } catch(t:Throwable) {
+            "motor: ${t.javaClass.simpleName}: ${t.message ?: "erro"}"
+        }
+    }
+
     fun calculate(table: RectF, balls: List<Ball>, pockets: List<PointF>, direct: Boolean, banks: Boolean, secondary: Boolean): List<Trajectory> {
         val cue = balls.firstOrNull { it.cue } ?: return emptyList()
         val objects = balls.filterNot { it.cue }
