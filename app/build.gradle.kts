@@ -7,17 +7,30 @@ android {
     namespace = "com.example.trajectoryoverlay"
     compileSdk = 35
 
+    signingConfigs {
+        create("stableDebug") {
+            storeFile = rootProject.file("ci/trajectory-debug.jks")
+            storePassword = "trajectory123"
+            keyAlias = "trajectory"
+            keyPassword = "trajectory123"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.example.trajectoryoverlay"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("stableDebug")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("stableDebug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
