@@ -20,6 +20,7 @@ public final class VisionResult {
     public PointF cueDeflectionEnd;
     public String debug = "";
     public final List<Ball> balls = new ArrayList<>();
+    public final List<Route> routes = new ArrayList<>();
 
     public boolean isDrawable() {
         return state == State.VALID_SHOT && roi != null && cueBall != null && primaryEnd != null;
@@ -38,9 +39,21 @@ public final class VisionResult {
         out.targetEnd = scale(targetEnd, scaleX, scaleY);
         out.cueDeflectionEnd = scale(cueDeflectionEnd, scaleX, scaleY);
         out.debug = debug;
+
         for (Ball b : balls) {
-            out.balls.add(new Ball(b.x * scaleX, b.y * scaleY,
-                    b.r * (scaleX + scaleY) * 0.5f, b.score, b.white));
+            out.balls.add(new Ball(
+                    b.x * scaleX,
+                    b.y * scaleY,
+                    b.r * (scaleX + scaleY) * 0.5f,
+                    b.score,
+                    b.white
+            ));
+        }
+
+        for (Route route : routes) {
+            Route copy = new Route(route.colorIndex, route.bank, route.score);
+            for (PointF p : route.points) copy.points.add(scale(p, scaleX, scaleY));
+            out.routes.add(copy);
         }
         return out;
     }
@@ -56,8 +69,27 @@ public final class VisionResult {
     public static final class Ball {
         public final float x, y, r, score;
         public final boolean white;
+
         public Ball(float x, float y, float r, float score, boolean white) {
-            this.x = x; this.y = y; this.r = r; this.score = score; this.white = white;
+            this.x = x;
+            this.y = y;
+            this.r = r;
+            this.score = score;
+            this.white = white;
+        }
+    }
+
+    /** Candidate potting route. points are ordered from cue/contact toward the pocket. */
+    public static final class Route {
+        public final List<PointF> points = new ArrayList<>();
+        public final int colorIndex;
+        public final boolean bank;
+        public final float score;
+
+        public Route(int colorIndex, boolean bank, float score) {
+            this.colorIndex = colorIndex;
+            this.bank = bank;
+            this.score = score;
         }
     }
 }
