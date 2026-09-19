@@ -36,14 +36,25 @@ public final class OverlayView extends View {
         super.onDraw(c);
         VisionResult r = result;
 
+        int[] loc = new int[2];
+        getLocationOnScreen(loc);
+
         String state = r == null ? "CAPTURE ACTIVE • waiting for frame" :
-                "POOL LAB • " + r.state.name() + " • " + (r.debug == null ? "" : r.debug);
-        float pad = dp(7);
+                "POOL LAB • " + r.state.name() + " • " + (r.debug == null ? "" : r.debug)
+                        + " • win=" + loc[0] + "," + loc[1];
+
         float panelH = dp(28);
-        c.drawRoundRect(new RectF(dp(8), dp(8), Math.min(getWidth()-dp(8), dp(610)), dp(8)+panelH), dp(6), dp(6), panel);
+        c.drawRoundRect(new RectF(dp(8), dp(8), Math.min(getWidth()-dp(8), dp(690)), dp(8)+panelH),
+                dp(6), dp(6), panel);
         c.drawText(state, dp(15), dp(27), debug);
 
         if (r == null) return;
+
+        // Vision coordinates are absolute MediaProjection/screen coordinates.
+        // Android overlay windows may start after a display-cutout safe inset in
+        // landscape. Convert absolute screen coordinates to this window's canvas.
+        c.save();
+        c.translate(-loc[0], -loc[1]);
 
         if (r.roi != null) {
             c.drawRect(r.roi, roiPaint);
@@ -53,20 +64,22 @@ public final class OverlayView extends View {
             c.drawCircle(r.cueBall.x, r.cueBall.y, Math.max(dp(5), r.cueRadius), cue);
         }
 
-        if (!r.isDrawable()) return;
+        if (r.isDrawable()) {
+            if (r.cueBall != null && r.primaryEnd != null) {
+                c.drawLine(r.cueBall.x, r.cueBall.y, r.primaryEnd.x, r.primaryEnd.y, main);
+            }
+            if (r.collisionBall != null) {
+                c.drawCircle(r.collisionBall.x, r.collisionBall.y, Math.max(dp(5), r.cueRadius*.95f), secondary);
+            }
+            if (r.collisionBall != null && r.targetEnd != null) {
+                c.drawLine(r.collisionBall.x, r.collisionBall.y, r.targetEnd.x, r.targetEnd.y, secondary);
+            }
+            if (r.primaryEnd != null && r.cueDeflectionEnd != null) {
+                c.drawLine(r.primaryEnd.x, r.primaryEnd.y, r.cueDeflectionEnd.x, r.cueDeflectionEnd.y, cue);
+            }
+        }
 
-        if (r.cueBall != null && r.primaryEnd != null) {
-            c.drawLine(r.cueBall.x, r.cueBall.y, r.primaryEnd.x, r.primaryEnd.y, main);
-        }
-        if (r.collisionBall != null) {
-            c.drawCircle(r.collisionBall.x, r.collisionBall.y, Math.max(dp(5), r.cueRadius*.95f), secondary);
-        }
-        if (r.collisionBall != null && r.targetEnd != null) {
-            c.drawLine(r.collisionBall.x, r.collisionBall.y, r.targetEnd.x, r.targetEnd.y, secondary);
-        }
-        if (r.primaryEnd != null && r.cueDeflectionEnd != null) {
-            c.drawLine(r.primaryEnd.x, r.primaryEnd.y, r.cueDeflectionEnd.x, r.cueDeflectionEnd.y, cue);
-        }
+        c.restore();
     }
 
     private float dp(float v) {
