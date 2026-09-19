@@ -67,15 +67,25 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
 
         val hue=dominantFeltHue(hsv)
         val tol=16.0
-        val loH=(hue-tol).coerceAtLeast(0.0)
-        val hiH=(hue+tol).coerceAtMost(179.0)
+        val rawLo=hue-tol
+        val rawHi=hue+tol
 
-        Core.inRange(
-            hsv,
-            Scalar(loH,35.0,25.0),
-            Scalar(hiH,255.0,255.0),
-            mask
-        )
+        if(rawLo>=0.0 && rawHi<=179.0){
+            Core.inRange(hsv,Scalar(rawLo,35.0,25.0),Scalar(rawHi,255.0,255.0),mask)
+        } else {
+            val a=Mat()
+            val b=Mat()
+            if(rawLo<0.0){
+                Core.inRange(hsv,Scalar(0.0,35.0,25.0),Scalar(rawHi,255.0,255.0),a)
+                Core.inRange(hsv,Scalar(180.0+rawLo,35.0,25.0),Scalar(179.0,255.0,255.0),b)
+            } else {
+                Core.inRange(hsv,Scalar(rawLo,35.0,25.0),Scalar(179.0,255.0,255.0),a)
+                Core.inRange(hsv,Scalar(0.0,35.0,25.0),Scalar(rawHi-180.0,255.0,255.0),b)
+            }
+            Core.bitwise_or(a,b,mask)
+            a.release()
+            b.release()
+        }
 
         val closeKernel=Imgproc.getStructuringElement(Imgproc.MORPH_RECT,Size(23.0,23.0))
         val openKernel=Imgproc.getStructuringElement(Imgproc.MORPH_RECT,Size(7.0,7.0))
@@ -244,8 +254,13 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
         roi.release()
         if(raw.isEmpty())return emptyList()
 
-        val geometric=raw
-            .filter{it.radius in minR.toFloat()..(maxR*1.15f)}
+        val plausible=raw.filter{it.radius in minR.toFloat()..(maxR*1.15f)}
+        if(plausible.isEmpty())return emptyList()
+
+        val radii=plausible.map{it.radius}.sorted()
+        val medianRadius=radii[radii.size/2]
+        val clustered=plausible.filter{it.radius>=medianRadius*.72f && it.radius<=medianRadius*1.38f}
+        val geometric=(if(clustered.size>=2)clustered else plausible)
             .sortedBy{it.center.x}
             .take(16)
 
