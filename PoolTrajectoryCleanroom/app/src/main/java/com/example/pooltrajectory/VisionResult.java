@@ -20,7 +20,7 @@ public final class VisionResult {
     public PointF cueDeflectionEnd;
     public String debug = "";
     public final List<Ball> balls = new ArrayList<>();
-    public final List<Route> routes = new ArrayList<>();
+    public final List<Trajectory> trajectories = new ArrayList<>();
 
     public boolean isDrawable() {
         return state == State.VALID_SHOT && roi != null && cueBall != null && primaryEnd != null;
@@ -50,10 +50,10 @@ public final class VisionResult {
             ));
         }
 
-        for (Route route : routes) {
-            Route copy = new Route(route.colorIndex, route.bank, route.score);
-            for (PointF p : route.points) copy.points.add(scale(p, scaleX, scaleY));
-            out.routes.add(copy);
+        for (Trajectory trajectory : trajectories) {
+            Trajectory copy = new Trajectory(trajectory.colorIndex, trajectory.cueBall);
+            for (PointF p : trajectory.points) copy.points.add(scale(p, scaleX, scaleY));
+            out.trajectories.add(copy);
         }
         return out;
     }
@@ -79,17 +79,15 @@ public final class VisionResult {
         }
     }
 
-    /** Candidate potting route. points are ordered from cue/contact toward the pocket. */
-    public static final class Route {
+    /** Predicted path of one ball after the current shot. */
+    public static final class Trajectory {
         public final List<PointF> points = new ArrayList<>();
         public final int colorIndex;
-        public final boolean bank;
-        public final float score;
+        public final boolean cueBall;
 
-        public Route(int colorIndex, boolean bank, float score) {
+        public Trajectory(int colorIndex, boolean cueBall) {
             this.colorIndex = colorIndex;
-            this.bank = bank;
-            this.score = score;
+            this.cueBall = cueBall;
         }
     }
 }
