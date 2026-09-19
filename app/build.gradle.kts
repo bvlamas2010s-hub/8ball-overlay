@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -8,7 +10,7 @@ if (!stableKeystore.exists()) {
     val encoded = rootProject.file("ci/trajectory-debug-keystore.b64")
     if (encoded.exists()) {
         stableKeystore.parentFile.mkdirs()
-        stableKeystore.writeBytes(java.util.Base64.getDecoder().decode(encoded.readText().trim()))
+        stableKeystore.writeBytes(Base64.getDecoder().decode(encoded.readText().trim()))
     }
 }
 
