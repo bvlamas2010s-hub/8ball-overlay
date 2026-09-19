@@ -8,7 +8,8 @@ import kotlin.math.min
 
 class OverlayView(context: Context): View(context) {
     @Volatile private var result: AnalysisResult? = null
-    @Volatile var showAll: Boolean = true
+    @Volatile var showAll: Boolean = false
+    @Volatile var visualDebug: Boolean = false
 
     private val directPaint=Paint(Paint.ANTI_ALIAS_FLAG).apply{
         color=Color.rgb(105,200,255);strokeWidth=5f;style=Paint.Style.STROKE
@@ -67,13 +68,15 @@ class OverlayView(context: Context): View(context) {
 
         if(r==null)return
 
-        // Mostra a região que o detector considera como mesa e as 6 caçapas.
-        canvas.drawRect(r.table,tablePaint)
-        val pocketRadius=max(8f,r.balls.map{it.radius}.average().toFloat().coerceAtLeast(8f)*.55f)
-        r.pockets.forEach{canvas.drawCircle(it.x,it.y,pocketRadius,pocketPaint)}
+        if(visualDebug){
+            // Diagnóstico opcional: mesa, caçapas e bolas detectadas.
+            canvas.drawRect(r.table,tablePaint)
+            val pocketRadius=max(8f,r.balls.map{it.radius}.average().toFloat().coerceAtLeast(8f)*.55f)
+            r.pockets.forEach{canvas.drawCircle(it.x,it.y,pocketRadius,pocketPaint)}
+        }
 
         val trajectories=if(showAll)r.trajectories else r.trajectories.take(1)
-        val maxLines=if(showAll)60 else 1
+        val maxLines=if(showAll)8 else 1
         trajectories.take(maxLines).forEachIndexed{i,t->
             val alpha=if(i==0)245 else max(34,115-i)
             drawPolyline(canvas,t.cuePath,directPaint,alpha)
@@ -88,10 +91,12 @@ class OverlayView(context: Context): View(context) {
             }
         }
 
-        r.balls.forEach{b->
-            ballPaint.color=if(b.cue)Color.CYAN else Color.argb(220,255,255,255)
-            ballPaint.alpha=if(b.cue)255 else 190
-            canvas.drawCircle(b.center.x,b.center.y,b.radius+3f,ballPaint)
+        if(visualDebug){
+            r.balls.forEach{b->
+                ballPaint.color=if(b.cue)Color.CYAN else Color.argb(220,255,255,255)
+                ballPaint.alpha=if(b.cue)255 else 190
+                canvas.drawCircle(b.center.x,b.center.y,b.radius+3f,ballPaint)
+            }
         }
     }
 
