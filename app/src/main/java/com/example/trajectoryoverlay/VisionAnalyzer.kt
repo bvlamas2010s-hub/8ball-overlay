@@ -273,8 +273,8 @@ class VisionAnalyzer(private val sensitivityProvider: () -> Int) {
         rgb.release()
         hsv.release()
 
-        val sat=m.\`val\`[1]
-        val value=m.\`val\`[2]
+        val sat=m.`val`[1]
+        val value=m.`val`[2]
         return (value*1.1-sat*1.35).toFloat()
     }
 
