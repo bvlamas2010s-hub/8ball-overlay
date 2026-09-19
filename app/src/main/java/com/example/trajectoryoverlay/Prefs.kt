@@ -19,4 +19,15 @@ object Prefs {
     fun setAll(c: Context, v: Boolean) = p(c).edit().putBoolean("all", v).apply()
     fun setVisualDebug(c: Context, v: Boolean) = p(c).edit().putBoolean("visualDebug", v).apply()
     fun setSensitivity(c: Context, v: Int) = p(c).edit().putInt("sensitivity", v).apply()
+
+    fun applyV07Defaults(c: Context) {
+        val prefs=p(c)
+        if(!prefs.getBoolean("v07DefaultsApplied", false)){
+            prefs.edit()
+                .putBoolean("all", false)
+                .putBoolean("visualDebug", false)
+                .putBoolean("v07DefaultsApplied", true)
+                .apply()
+        }
+    }
 }
