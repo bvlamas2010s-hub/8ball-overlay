@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         projectionManager = getSystemService(MediaProjectionManager::class.java)
+        Prefs.applyV07Defaults(this)
         openCvReady = OpenCVLoader.initLocal()
         requestNotificationPermission()
         setContentView(buildUi())
