@@ -66,10 +66,9 @@ class OverlayView(context: Context): View(context) {
         if(r==null)return
 
         if(visualDebug){
-            // Diagnóstico opcional: mesa, caçapas e bolas detectadas.
+            // Diagnóstico ao vivo mínimo: apenas a caixa da mesa.
+            // Bolas/caçapas ficam somente no print salvo, para não poluir a tela.
             canvas.drawRect(r.table,tablePaint)
-            val pocketRadius=max(8f,r.balls.map{it.radius}.average().toFloat().coerceAtLeast(8f)*.55f)
-            r.pockets.forEach{canvas.drawCircle(it.x,it.y,pocketRadius,pocketPaint)}
         }
 
         val trajectories=if(showAll)r.trajectories else r.trajectories.take(1)
